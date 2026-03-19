@@ -1,15 +1,28 @@
-// BoqTools.cs — v12 FINAL (archivo limpio, sin duplicados)
-// Árbol confirmado por screenshots:
-//   NWD > NWC > [NIVEL: LcRevitLayer] > [CAT: LcRevitCollection/Categoria]
-//            > [FAMILIA: LcRevitCollection/Familia] > [TIPO: LcRevitCollection/Tipo + lcldrevit_tab_type]
-//            > [INSTANCIA: LcRevitData_Element = tab "Componente"]
+// BoqTools.cs — v13
+// Mapa completo de parámetros Revit confirmados por screenshots:
 //
-// Cantidades en instancia (ya en metros, NO convertir):
-//   lcldrevit_parameter_-1012805 = Área (m²)
-//   lcldrevit_parameter_-1012806 = Volumen (m³)
-//   lcldrevit_parameter_-1004005 = Longitud (m)
+// PC INSTANCIA: LcRevitData_Element (tab "Componente"/"Element")
+//   COMUNES:
+//     LcRevitPropertyElementName/Type/Family/Category/Id
+//     lcldrevit_parameter_-1012806  Volumen (DoubleVolume) — todos los elementos
+//     lcldrevit_parameter_-1005500  Structural Material
+//   ÁREA (solo Muros/Floors/Ceilings/Roofs):
+//     lcldrevit_parameter_-1012805  Área (DoubleArea)
+//   LONGITUD POR CATEGORÍA:
+//     -1004005  Walls/Muros, Curtain Wall Mullions, Railings, Pipes, Ducts, Cable Trays
+//     -1001375  Structural Framing/Vigas + Structural Columns/Columnas (DoubleLength)
 //
-// Lectura de valores: p.Value.ToDouble(null) → fallback p.Value.ToDisplayString() → fallback PV(ToString())
+// PC TIPO: lcldrevit_tab_type (tab "Tipo")
+//   COMUNES:
+//     lcldrevit_parameter_-1010103  Description
+//     lcldrevit_parameter_-1005500  Structural Material
+//   SOLO MUROS:     lcldrevit_parameter_-1001000  Width
+//   SOLO FLOORS:    lcldrevit_parameter_-1001902  Default Thickness
+//   SOLO CEILINGS:  lcldrevit_parameter_-1002206  Thickness
+//   SOLO ROOFS:     lcldrevit_parameter_-1001600  Default Thickness
+//
+// LECTURA: switch(VariantData.DataType) → ToDoubleArea/ToDoubleVolume/ToDoubleLength
+//          ToDisplayString() devuelve "Unknown" para estos tipos — NO usar para números
 
 using System;
 using System.Collections.Generic;
@@ -23,30 +36,40 @@ namespace NavisBOQ.Plugin
 {
     public class BoqRow
     {
-        public string Nivel    { get; set; } = "Sin nivel";
-        public string Categoria{ get; set; } = "";
-        public string Familia  { get; set; } = "";
-        public string Tipo     { get; set; } = "";
-        public double Area     { get; set; }
-        public double Volumen  { get; set; }
-        public double Longitud { get; set; }
-        public double Cantidad { get; set; }
-        public string Unidad   { get; set; } = "pza";
-        public string ElemId   { get; set; } = "";
+        public string Nivel          { get; set; } = "Sin nivel";
+        public string Categoria      { get; set; } = "";
+        public string Familia        { get; set; } = "";
+        public string Tipo           { get; set; } = "";
+        // Propiedades del nodo Tipo (lcldrevit_tab_type)
+        public string TipoDesc       { get; set; } = "";   // Description (-1010103)
+        public string TipoMaterial   { get; set; } = "";   // Structural Material (-1005500)
+        public double TipoAncho      { get; set; }         // Width (-1001000) — solo Muros
+        public double TipoEspesor    { get; set; }         // Default Thickness (-1001006) — solo Suelos
+        // Cantidades de la instancia
+        public double Area           { get; set; }
+        public double Volumen        { get; set; }
+        public double Longitud       { get; set; }
+        public double Cantidad       { get; set; }
+        public string Unidad         { get; set; } = "pza";
+        public string ElemId         { get; set; } = "";
     }
 
     public class BoqSummaryRow
     {
-        public string Nivel    { get; set; } = "";
-        public string Cat      { get; set; } = "";
-        public string Familia  { get; set; } = "";
-        public string Tipo     { get; set; } = "";
-        public double Area     { get; set; }
-        public double Vol      { get; set; }
-        public double Long_    { get; set; }
-        public double Cantidad { get; set; }
-        public string Unidad   { get; set; } = "";
-        public int    N        { get; set; }
+        public string Nivel        { get; set; } = "";
+        public string Cat          { get; set; } = "";
+        public string Familia      { get; set; } = "";
+        public string Tipo         { get; set; } = "";
+        public string TipoDesc     { get; set; } = "";
+        public string TipoMaterial { get; set; } = "";
+        public double TipoAncho    { get; set; }
+        public double TipoEspesor  { get; set; }
+        public double Area         { get; set; }
+        public double Vol          { get; set; }
+        public double Long_        { get; set; }
+        public double Cantidad     { get; set; }
+        public string Unidad       { get; set; } = "";
+        public int    N            { get; set; }
     }
 
     public class ExtractResult
@@ -70,8 +93,13 @@ namespace NavisBOQ.Plugin
             {"Ventanas",           ("Ventanas",    "pza")},{"Windows",            ("Ventanas",    "pza")},
             {"Escaleras",          ("Escaleras",   "pza")},{"Stairs",             ("Escaleras",   "pza")},
             {"Barandillas",        ("Barandales",  "ml")}, {"Railings",           ("Barandales",  "ml")},
-            {"Structural Framing", ("Estructura",  "ml")}, {"Structural Columns", ("Columnas",    "pza")},
-            {"Structural Foundations",("Cimentacion","m3")},
+            {"Structural Framing",     ("Vigas",         "ml")}, // Length -1001375
+            {"Structural Columns",     ("Columnas",      "ml")}, // Length -1001375
+            {"Columnas estructurales", ("Columnas",      "ml")},
+            {"Vigas estructurales",    ("Vigas",         "ml")},
+            {"Structural Foundations", ("Cimentacion",   "m3")}, // Volume only
+            {"Cimentaciones",          ("Cimentacion",   "m3")},
+
             {"Curtain Wall Panels",("Fachada",     "m2")}, {"Curtain Panels",     ("Fachada",     "m2")},
             {"Curtain Wall Mullions",("Montantes",  "ml")},
             {"Ducts",              ("Ductos",      "ml")}, {"Duct Fittings",      ("Conex Ducto", "pza")},
@@ -88,7 +116,7 @@ namespace NavisBOQ.Plugin
         public static readonly HashSet<string> EsPza = new HashSet<string>(StringComparer.OrdinalIgnoreCase){
             "Doors","Windows","Mechanical Equipment","Air Terminals","Plumbing Fixtures",
             "Electrical Equipment","Lighting Fixtures","Stairs","Generic Models",
-            "Structural Columns","Duct Fittings","Pipe Fittings","Railings","Specialty Equipment",
+            "Duct Fittings","Pipe Fittings","Railings","Specialty Equipment",
             "Furniture","Casework","Puertas","Ventanas","Escaleras","Mobiliario","Carpinteria",
             "Aparatos sanitarios","Mobiliario","Eq Mecanico","Difusores","Sanitarios","Luminarias",
         };
@@ -189,16 +217,17 @@ namespace NavisBOQ.Plugin
         }
 
         // ── DUMP INSTANCIA ────────────────────────────────────────────────────
-        // Diagnóstico: recorre nodos buscando LcRevitData_Element directamente
-        // (misma lógica que BuildRow). Límite 30,000 nodos. Sin filtro HasGeometry.
+        // Usa EXACTAMENTE la misma lógica que BuildRow para garantizar consistencia.
+        // Recorre nodos geo, sube por AncestorsAndSelf buscando LcRevitData_Element.
+        // Límite: 10,000 nodos geo visitados.
         public static object DumpInstancia(string categoria = "Walls", int maxItems = 3)
         {
             EnsureDoc();
-            var result   = new List<object>();
-            var seen     = new HashSet<string>();
-            int n        = 0;
-            int visited  = 0;
-            int maxVisit = 30000;
+            var result  = new List<object>();
+            var seen    = new HashSet<string>();
+            int n       = 0;
+            int visited = 0;
+            int maxVisit= 10000;
 
             var propsKey = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
                 "LcRevitPropertyElementName","LcRevitPropertyElementType",
@@ -212,37 +241,48 @@ namespace NavisBOQ.Plugin
                 foreach (var item in model.RootItem.DescendantsAndSelf)
                 {
                     if (n >= maxItems || visited++ > maxVisit) break;
+                    if (!item.HasGeometry) continue; // solo nodos geo
 
-                    // Buscar LcRevitData_Element en este nodo directamente
-                    var pc = item.PropertyCategories.FirstOrDefault(p =>
-                        string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
-                    if (pc == null) continue;
-
-                    // Filtrar por categoría
-                    var catProp = pc.Properties.FirstOrDefault(p =>
-                        string.Equals(p.Name, "LcRevitPropertyElementCategory", StringComparison.OrdinalIgnoreCase));
-                    if (catProp?.Value == null) continue;
-                    var cat = SafeDisplay(catProp.Value) ?? "";
-                    if (!string.IsNullOrEmpty(categoria) && !OIC(cat, categoria)) continue;
-
-                    if (!seen.Add(item.InstanceGuid.ToString())) continue;
+                    // Subir por AncestorsAndSelf exactamente como BuildRow
+                    PropertyCategory elemPC = null;
+                    ModelItem instNode = null;
+                    foreach (var a in item.AncestorsAndSelf)
+                    {
+                        var pc = a.PropertyCategories.FirstOrDefault(p =>
+                            string.Equals(p.Name,"LcRevitData_Element",StringComparison.OrdinalIgnoreCase));
+                        if (pc == null) continue;
+                        var catP = pc.Properties.FirstOrDefault(p =>
+                            string.Equals(p.Name,"LcRevitPropertyElementCategory",StringComparison.OrdinalIgnoreCase));
+                        if (catP?.Value == null) continue;
+                        var catV = SafeDisplay(catP.Value) ?? "";
+                        if (string.IsNullOrEmpty(catV)) continue;
+                        if (!string.IsNullOrEmpty(categoria) && !OIC(catV,categoria)) break;
+                        instNode = a; elemPC = pc; break;
+                    }
+                    if (instNode == null || !seen.Add(instNode.InstanceGuid.ToString())) continue;
                     n++;
 
+                    // Leer cantidades igual que BuildRow
+                    double area=0,vol=0,len=0;
+                    ReadQuantities(instNode, ref area, ref vol, ref len);
+
                     result.Add(new {
-                        nodo    = item.DisplayName,
-                        clase   = item.ClassDisplayName,
-                        has_geo = item.HasGeometry,
-                        cat     = cat,
+                        nodo    = instNode.DisplayName,
+                        geo     = item.DisplayName,
+                        cat     = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementCategory")?.Value),
                         nivel   = LevelFromTree(item) ?? "?",
-                        params_clave = pc.Properties
+                        area_m2 = area,
+                        vol_m3  = vol,
+                        long_m  = len,
+                        params_clave = elemPC.Properties
                             .Where(p => propsKey.Contains(p.Name))
                             .Select(p => new {
-                                display     = p.DisplayName,
-                                name        = p.Name,
-                                v_toString  = p.Value?.ToString()    ?? "NULL",
-                                v_toDisplay = SafeDisplay(p.Value)    ?? "NULL",
-                                v_toDouble  = SafeDouble(p.Value),
-                                v_pv        = PV(SafeDisplay(p.Value) ?? "")
+                                display    = p.DisplayName,
+                                name       = p.Name,
+                                datatype   = p.Value?.DataType.ToString() ?? "NULL",
+                                v_toDisplay= SafeDisplay(p.Value) ?? "NULL",
+                                v_typed    = ExtractDoubleFromVariant(p.Value),  // método correcto por DataType
+                                v_splitnum = SplitNum(SafeDisplay(p.Value) ?? "")
                             }).ToList()
                     });
                 }
@@ -251,7 +291,7 @@ namespace NavisBOQ.Plugin
 
             return new {
                 categoria, n, visitados=visited,
-                nota="Compara v_toDisplay vs v_pv para -1012805(Area) y -1012806(Vol). Si v_pv=0 hay bug en PV().",
+                nota="area_m2/vol_m3/long_m deben tener valor si el NWC tiene esos parametros exportados.",
                 items=result
             };
         }
@@ -360,12 +400,33 @@ namespace NavisBOQ.Plugin
                 Nota=rows.Count==0?"0 elementos. Usa dump_geo_set para diagnosticar.":"" };
         }
 
-        // ── RUN PRECONSTRUCCION 1 ────────────────────────────────────────────
+        // ── RUN PRECONSTRUCCION 1 — Arquitectura ────────────────────────────
         public static object RunPreConstruccion1()
         {
             var cats = new List<string>{"Muros","Walls","Losas","Floors","Cubiertas","Roofs",
                 "Plafones","Ceilings","Puertas","Doors","Ventanas","Windows","Fachada","Curtain Wall Panels"};
             return FmtDesglose("Preconstruccion 1 - Arquitectura", ExtractQuantities(cats, summaryOnly:false));
+        }
+
+        // ── RUN PRECONSTRUCCION 2 — Estructura ──────────────────────────────
+        // Las categorías de Revit son las estándar (Walls, Floors, etc.)
+        // La separación arquitectónico vs estructural la hace el Selection Set del usuario.
+        // Esta corrida cubre columnas, vigas, cimentaciones + muros y losas
+        // por si el usuario corre la corrida sobre un set de estructura que los incluye.
+        public static object RunPreConstruccion2()
+        {
+            var cats = new List<string>{
+                // Estructuras de concreto/acero
+                "Structural Columns",
+                "Structural Framing",
+                "Structural Foundations",
+                // Muros y losas (misma categoría Revit — el set define si son estructurales)
+                "Walls","Muros",
+                "Floors","Suelos","Losas",
+                // Cubiertas estructurales
+                "Roofs","Cubiertas"
+            };
+            return FmtDesglose("Preconstruccion 2 - Estructura", ExtractQuantities(cats, summaryOnly:false));
         }
 
         // ── HIGHLIGHT / CLEAR ────────────────────────────────────────────────
@@ -420,13 +481,26 @@ namespace NavisBOQ.Plugin
 
             foreach (var a in geo.AncestorsAndSelf)
             {
-                var pc = a.PropertyCategories.FirstOrDefault(p =>
-                    string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
+                // Usar FindCategoryByDisplayName (más eficiente que FirstOrDefault)
+                // El tab "Componente" en español / "Element" en inglés = LcRevitData_Element
+                PropertyCategory pc = null;
+                try { pc = a.PropertyCategories.FindCategoryByDisplayName("Componente"); } catch {}
+                if (pc == null) try { pc = a.PropertyCategories.FindCategoryByDisplayName("Element"); } catch {}
+                if (pc == null) try { pc = a.PropertyCategories.FindCategoryByDisplayName("LcRevitData_Element"); } catch {}
+                // Fallback: buscar por InternalName en la colección
+                if (pc == null)
+                    pc = a.PropertyCategories.FirstOrDefault(p =>
+                        string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
                 if (pc == null) continue;
 
-                // Verificar que tiene LcRevitPropertyElementCategory con valor
-                var catProp = pc.Properties.FirstOrDefault(p =>
-                    string.Equals(p.Name, "LcRevitPropertyElementCategory", StringComparison.OrdinalIgnoreCase));
+                // Verificar que tiene LcRevitPropertyElementCategory con valor real
+                // Usar FindPropertyByDisplayName según documentación
+                DataProperty catProp = null;
+                try { catProp = pc.Properties.FindPropertyByDisplayName("Category"); } catch {}
+                if (catProp == null) try { catProp = pc.Properties.FindPropertyByDisplayName("Categoría"); } catch {}
+                if (catProp == null)
+                    catProp = pc.Properties.FirstOrDefault(p =>
+                        string.Equals(p.Name, "LcRevitPropertyElementCategory", StringComparison.OrdinalIgnoreCase));
                 if (catProp?.Value == null) continue;
                 var catVal = SafeDisplay(catProp.Value);
                 if (string.IsNullOrWhiteSpace(catVal)) continue;
@@ -438,32 +512,57 @@ namespace NavisBOQ.Plugin
 
             if (instNode == null || elemPC == null) return null;
 
-            // 2. Metadatos
-            var catRevit = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementCategory")?.Value) ?? CatFromTree(geo);
+            // 2. Metadatos — FindPropertyByDisplayName según docs twentytwo.space
+            string catRevit = null;
+            try { catRevit = SafeDisplay(elemPC.Properties.FindPropertyByDisplayName("Category")?.Value); } catch {}
+            if (string.IsNullOrEmpty(catRevit))
+                try { catRevit = SafeDisplay(elemPC.Properties.FindPropertyByDisplayName("Categoría")?.Value); } catch {}
+            if (string.IsNullOrEmpty(catRevit))
+                catRevit = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementCategory")?.Value);
+            if (string.IsNullOrEmpty(catRevit)) catRevit = CatFromTree(geo);
             if (string.IsNullOrEmpty(catRevit)) return null;
 
             string boq=catRevit, unit="";
             var m=CM.Mapa.FirstOrDefault(x=>OIC(catRevit,x.Key));
             if (m.Key!=null){boq=m.Value.N;unit=m.Value.U;}
 
-            var familia = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementFamily")?.Value) ?? FamFromTree(geo) ?? "Sin familia";
-            var tipo    = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementType")?.Value)
-                       ?? SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementName")?.Value)
-                       ?? TipoFromTree(geo) ?? familia;
-            var nivel   = LevelFromTree(geo) ?? "Sin nivel";
+            string familia = null;
+            try { familia = SafeDisplay(elemPC.Properties.FindPropertyByDisplayName("Family")?.Value); } catch {}
+            if (string.IsNullOrEmpty(familia))
+                try { familia = SafeDisplay(elemPC.Properties.FindPropertyByDisplayName("Familia")?.Value); } catch {}
+            if (string.IsNullOrEmpty(familia))
+                familia = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementFamily")?.Value) ?? FamFromTree(geo) ?? "Sin familia";
+
+            string tipo = null;
+            try { tipo = SafeDisplay(elemPC.Properties.FindPropertyByDisplayName("Type")?.Value); } catch {}
+            if (string.IsNullOrEmpty(tipo))
+                tipo = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementType")?.Value)
+                    ?? SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementName")?.Value)
+                    ?? TipoFromTree(geo) ?? familia;
+
+            string nivel = "Sin nivel";
+            try { nivel = LevelFromTree(geo) ?? "Sin nivel"; } catch {}
             var elemId  = SafeDisplay(elemPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementId")?.Value) ?? "";
 
-            // 3. Cantidades — buscar en TODOS los PCs Revit de la instancia y sus ancestros cercanos
+            // 3. Cantidades + Material estructural de instancia
             double area=0, vol=0, len=0;
-            ReadQuantities(instNode, ref area, ref vol, ref len);
+            try { ReadQuantities(instNode, ref area, ref vol, ref len, catRevit); } catch {}
 
             // Si no encontró, intentar en el nodo padre de la instancia (para nested families)
-            if ((area==0 || vol==0) && instNode.Parent != null)
+            if ((area==0 || vol==0 || len==0) && instNode.Parent != null)
             {
                 var parentPC = instNode.Parent.PropertyCategories.FirstOrDefault(p =>
                     string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
-                if (parentPC != null) ReadQuantitiesFromPC(parentPC, ref area, ref vol, ref len);
+                if (parentPC != null) ReadQuantitiesFromPC(parentPC, ref area, ref vol, ref len, catRevit);
             }
+
+            // Material estructural desde instancia (lcldrevit_parameter_-1005500)
+            // Está en LcRevitData_Element para estructurales (columnas, vigas, zapatas)
+            string matEst = "";
+            try {
+                var pME = instNode.PropertyCategories.FindPropertyByName("LcRevitData_Element", "lcldrevit_parameter_-1005500");
+                if (pME?.Value != null) matEst = SafeDisplay(pME.Value) ?? "";
+            } catch {}
 
             // 4. Cantidad y unidad
             double qty; string u;
@@ -476,44 +575,194 @@ namespace NavisBOQ.Plugin
             else if (len >0){qty=Math.Round(len,3); u="ml";}
             else           {qty=1;u="pza";}
 
+            // 5. Propiedades del nodo TIPO (lcldrevit_tab_type)
+            // El nodo Tipo está en los ancestros entre instNode y el nodo Familia.
+            // Imagen confirma: breadcrumb = ... > Basic Wall > IDOM-ARQ_METALLIC WALL 75MM
+            // El nodo justo por encima de instNode en AncestorsAndSelf es el nodo Tipo.
+            string tipoDesc = ""; string tipoMat = "";
+            double tipoAncho = 0; double tipoEspesor = 0;
+
+            // Buscar el nodo con PC lcldrevit_tab_type en los ancestros
+            try
+            {
+            foreach (var a in instNode.AncestorsAndSelf)
+            {
+                var typePC = a.PropertyCategories.FirstOrDefault(p =>
+                    string.Equals(p.Name, "lcldrevit_tab_type", StringComparison.OrdinalIgnoreCase));
+                if (typePC == null) continue;
+
+                // Leer parámetros del tipo usando FindPropertyByName (internal names)
+                // Description: -1010103
+                var pDesc = typePC.Properties.FirstOrDefault(p => p.Name == "lcldrevit_parameter_-1010103");
+                if (pDesc?.Value != null) tipoDesc = SafeDisplay(pDesc.Value) ?? "";
+
+                // Structural Material: -1005500
+                var pMat = typePC.Properties.FirstOrDefault(p => p.Name == "lcldrevit_parameter_-1005500");
+                if (pMat?.Value != null) tipoMat = SafeDisplay(pMat.Value) ?? "";
+
+                // Width (solo Muros): -1001000
+                var pW = typePC.Properties.FirstOrDefault(p => p.Name == "lcldrevit_parameter_-1001000");
+                if (pW?.Value != null) tipoAncho = ExtractDoubleFromVariant(pW.Value);
+
+                // Espesor por categoría (IDs confirmados por screenshots):
+                // Floors/Suelos:    -1001902 Default Thickness
+                // Ceilings/Techos:  -1002206 Thickness
+                // Roofs/Cubiertas:  -1001600 Default Thickness
+                string[] espesorIds = { "lcldrevit_parameter_-1001902",
+                                        "lcldrevit_parameter_-1002206",
+                                        "lcldrevit_parameter_-1001600",
+                                        "lcldrevit_parameter_-1001006" }; // fallback
+                foreach (var eid in espesorIds)
+                {
+                    var pTh = typePC.Properties.FirstOrDefault(p => p.Name == eid);
+                    if (pTh?.Value != null) { tipoEspesor = ExtractDoubleFromVariant(pTh.Value); if (tipoEspesor > 0) break; }
+                }
+                // Fallback por DisplayName si ningún ID encontró valor
+                if (tipoEspesor == 0)
+                {
+                    var pThC = typePC.Properties.FirstOrDefault(p =>
+                        OIC(p.DisplayName ?? "", "Thickness") || OIC(p.DisplayName ?? "", "Espesor") ||
+                        OIC(p.DisplayName ?? "", "Grosor"));
+                    if (pThC?.Value != null) tipoEspesor = ExtractDoubleFromVariant(pThC.Value);
+                }
+
+                break; // Solo el primer nodo Tipo encontrado
+            }
+            } catch {} // try bloque tipo
+
             return new BoqRow{
-                Nivel=nivel,Categoria=boq,Familia=Clean(familia),Tipo=Clean(tipo),
-                Area=Math.Round(area,4),Volumen=Math.Round(vol,4),Longitud=Math.Round(len,4),
-                Cantidad=qty,Unidad=u,ElemId=elemId
+                Nivel        = nivel,
+                Categoria    = boq,
+                Familia      = Clean(familia),
+                Tipo         = Clean(tipo),
+                TipoDesc     = tipoDesc,
+                TipoMaterial = !string.IsNullOrEmpty(tipoMat) ? tipoMat : matEst,
+                TipoAncho    = Math.Round(tipoAncho,  4),
+                TipoEspesor  = Math.Round(tipoEspesor,4),
+                Area         = Math.Round(area,    4),
+                Volumen      = Math.Round(vol,      4),
+                Longitud     = Math.Round(len,      4),
+                Cantidad     = qty,
+                Unidad       = u,
+                ElemId       = elemId
             };
         }
 
         // ── LECTORES DE CANTIDADES ────────────────────────────────────────────
-        // Estrategia GPC: iterar PropertyCategories del nodo DIRECTAMENTE,
-        // sin subir a ancestros. Leer con ToDisplayString() y parsear con SplitNum().
-        static void ReadQuantities(ModelItem node, ref double area, ref double vol, ref double len)
+        // Estrategia definitiva (doc técnico GPC/2026 + API Navisworks):
+        //
+        // PASO 1: FindPropertyByName(catInternalName, propInternalName)
+        //         Acceso directo O(1) por internal name — estable cross-locale.
+        //         Recomendado por Autodesk y ref [4] del doc técnico.
+        //
+        // PASO 2: Si PASO 1 falla, iterar TODAS las PropertyCategories del nodo
+        //         usando switch(DataType) para cada prop — patrón GPC ExportEngine.
+        //
+        // PASO 3: Si sigue sin datos, intentar en nodo padre (geometry leaf pattern).
+        //
+        // Internal names confirmados por imagen + doc técnico:
+        //   CAT:  LcRevitData_Element
+        //   AREA: lcldrevit_parameter_-1012805  → VariantDataType.DoubleArea
+        //   VOL:  lcldrevit_parameter_-1012806  → VariantDataType.DoubleVolume
+        //   LEN:  lcldrevit_parameter_-1004005  → VariantDataType.DoubleLength
+        static void ReadQuantities(ModelItem node, ref double area, ref double vol, ref double len, string catRevit = null)
         {
-            // Solo iterar PropertyCategories del nodo instancia — NO AncestorsAndSelf
+            const string CAT   = "LcRevitData_Element";
+            const string AREA  = "lcldrevit_parameter_-1012805";
+            const string VOL   = "lcldrevit_parameter_-1012806";
+            // Longitud: -1004005 para Muros/Cortina/Tuberías/Ductos/Rieles
+            //           -1001375 para Structural Columns/Framing/Vigas/Columnas
+            bool isStructural = !string.IsNullOrEmpty(catRevit) && (
+                OIC(catRevit,"Structural Column") || OIC(catRevit,"Columna") ||
+                OIC(catRevit,"Structural Framing") || OIC(catRevit,"Viga") ||
+                OIC(catRevit,"Framing"));
+            string LEN = isStructural ? "lcldrevit_parameter_-1001375" : "lcldrevit_parameter_-1004005";
+
+            // PASO 1: FindPropertyByName — acceso directo por internal names
+            // Esta es la forma recomendada por la documentación Autodesk.
+            try
+            {
+                var pArea = node.PropertyCategories.FindPropertyByName(CAT, AREA);
+                if (pArea?.Value != null) { double v = ExtractDoubleFromVariant(pArea.Value); if (v > 0) area = v; }
+            } catch {}
+
+            try
+            {
+                var pVol = node.PropertyCategories.FindPropertyByName(CAT, VOL);
+                if (pVol?.Value != null) { double v = ExtractDoubleFromVariant(pVol.Value); if (v > 0) vol = v; }
+            } catch {}
+
+            try
+            {
+                var pLen = node.PropertyCategories.FindPropertyByName(CAT, LEN);
+                if (pLen?.Value != null) { double v = ExtractDoubleFromVariant(pLen.Value); if (v > 0) len = v; }
+            } catch {}
+
+            // Si el acceso directo funcionó para al menos un valor, listo
+            if (area > 0 || vol > 0 || len > 0) return;
+
+            // PASO 2: Iterar TODAS las PropertyCategories (fallback exhaustivo)
+            // Cubre casos donde el nodo tiene los datos pero en otro PC o nombre de cat
             foreach (var pc in node.PropertyCategories)
                 ReadQuantitiesFromPC(pc, ref area, ref vol, ref len);
 
-            // Si no encontró nada, intentar en el nodo padre (para casos de geometry leaf)
+            // PASO 3: Nodo padre (geometry leaf pattern — el nodo geo tiene un padre instancia)
             if (area == 0 && vol == 0 && len == 0 && node.Parent != null)
-                foreach (var pc in node.Parent.PropertyCategories)
-                    ReadQuantitiesFromPC(pc, ref area, ref vol, ref len);
+            {
+                try
+                {
+                    var pA = node.Parent.PropertyCategories.FindPropertyByName(CAT, AREA);
+                    if (pA?.Value != null) { double v = ExtractDoubleFromVariant(pA.Value); if (v > 0) area = v; }
+                } catch {}
+                try
+                {
+                    var pV = node.Parent.PropertyCategories.FindPropertyByName(CAT, VOL);
+                    if (pV?.Value != null) { double v = ExtractDoubleFromVariant(pV.Value); if (v > 0) vol = v; }
+                } catch {}
+                try
+                {
+                    var pL = node.Parent.PropertyCategories.FindPropertyByName(CAT, LEN);
+                    if (pL?.Value != null) { double v = ExtractDoubleFromVariant(pL.Value); if (v > 0) len = v; }
+                } catch {}
+
+                // Fallback exhaustivo en el padre
+                if (area == 0 && vol == 0 && len == 0)
+                    foreach (var pc in node.Parent.PropertyCategories)
+                        ReadQuantitiesFromPC(pc, ref area, ref vol, ref len);
+            }
         }
 
-        static void ReadQuantitiesFromPC(PropertyCategory pc, ref double area, ref double vol, ref double len)
+        // ============================================================
+        // ReadQuantitiesFromPC — método definitivo basado en:
+        // 1. Documento técnico "Acceso a Área y Volumen via MCP" (GPC/2026)
+        // 2. API Navisworks: VariantDataType enum
+        // 3. Repo kikki/MCP-Add-in-Autodesk_Navisworks_Manage_2026
+        //
+        // CLAVE: Area=DoubleArea → ToDoubleArea()
+        //        Volume=DoubleVolume → ToDoubleVolume()
+        //        Length=DoubleLength → ToDoubleLength()
+        //        ToDisplayString() devuelve "Unknown" para DoubleArea/DoubleVolume
+        //        NO usar ToString() ni ToDisplayString() para doubles con unidad.
+        // ============================================================
+        static void ReadQuantitiesFromPC(PropertyCategory pc, ref double area, ref double vol, ref double len, string catRevit = null)
         {
             foreach (var p in pc.Properties)
             {
                 if (p.Value == null) continue;
                 var pn = p.Name ?? "";
-                var dn = RemoveAccents(p.DisplayName ?? "");
 
-                // Identificar por InternalName (más confiable que DisplayName)
+                // Identificar parámetro por InternalName (estable cross-locale)
                 bool isArea = string.Equals(pn, "lcldrevit_parameter_-1012805", StringComparison.OrdinalIgnoreCase);
                 bool isVol  = string.Equals(pn, "lcldrevit_parameter_-1012806", StringComparison.OrdinalIgnoreCase);
-                bool isLen  = string.Equals(pn, "lcldrevit_parameter_-1004005", StringComparison.OrdinalIgnoreCase);
+                // Longitud: -1004005 = Muros, Railings, Pipes, Ducts, etc.
+                //           -1001375 = Structural Columns y Structural Framing (confirmado por screenshots)
+                bool isLen  = string.Equals(pn, "lcldrevit_parameter_-1004005", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(pn, "lcldrevit_parameter_-1001375", StringComparison.OrdinalIgnoreCase);
 
-                // Fallback por DisplayName si InternalName no matchea
+                // Fallback por DisplayName solo si el internal name no matcheó
                 if (!isArea && !isVol && !isLen)
                 {
+                    var dn = RemoveAccents(p.DisplayName ?? "");
                     isArea = OIC(dn,"Area")    && !OIC(dn,"Category") && !OIC(dn,"Number") && !OIC(dn,"Base") && !OIC(dn,"Room") && !OIC(dn,"IFC");
                     isVol  = OIC(dn,"Volume")  || OIC(dn,"Volumen");
                     isLen  = (OIC(dn,"Length") || OIC(dn,"Longitud")) && !OIC(dn,"Number") && !OIC(dn,"Wall") && !OIC(dn,"Curve") && !OIC(dn,"Unconnected");
@@ -521,51 +770,68 @@ namespace NavisBOQ.Plugin
 
                 if (!isArea && !isVol && !isLen) continue;
 
-                // GPC Pipeline: usar ToDisplayString() y extraer número con SplitNum()
-                // ToDisplayString() → "3225,846 m²" → SplitNum() → 3225.846
-                // ToString()        → "Unknown"      → NO USAR
-                var ds = "";
-                try { ds = p.Value.ToDisplayString() ?? ""; } catch {}
-                double v = SplitNum(ds);
+                // Extraer valor numérico según VariantDataType (patrón kikki/MCP-Add-in-2026)
+                // switch(DataType) es el único método correcto para DoubleArea/DoubleVolume.
+                // ToDisplayString() → "Unknown" para estos tipos → NO USAR para números.
+                double v = ExtractDoubleFromVariant(p.Value);
 
-                if (isArea && v > area) area = v;
-                if (isVol  && v > vol)  vol  = v;
-                if (isLen  && v > len)  len  = v;
+                if (isArea && v > 0 && v > area) area = v;
+                if (isVol  && v > 0 && v > vol)  vol  = v;
+                if (isLen  && v > 0 && v > len)  len  = v;
             }
         }
 
-        // Extrae el número de un string con unidades: "3225,846 m²" → 3225.846
-        // Basado en la lógica de NavisHeuristics.SplitNumberAndUnit() del plugin GPC.
+        // Extrae double de VariantData usando switch(DataType).
+        // Basado en kikki/MCP-Add-in-Autodesk_Navisworks_Manage_2026 FallbackBackend.cs
+        // y API docs Autodesk VariantDataType enum.
+        static double ExtractDoubleFromVariant(VariantData v)
+        {
+            if (v == null) return 0;
+            try
+            {
+                switch (v.DataType)
+                {
+                    case VariantDataType.DoubleArea:
+                        // ToDoubleArea() es el único método correcto para Area
+                        // Devuelve el valor en unidades del modelo (m² si el modelo está en metros)
+                        return v.ToDoubleArea();
+
+                    case VariantDataType.DoubleVolume:
+                        // ToDoubleVolume() es el único método correcto para Volume
+                        return v.ToDoubleVolume();
+
+                    case VariantDataType.DoubleLength:
+                        return v.ToDoubleLength();
+
+                    case VariantDataType.Double:
+                        return v.ToDouble();
+
+                    case VariantDataType.Int32:
+                        return v.ToInt32();
+
+                    default:
+                        // Para otros tipos (DisplayString, etc.) intentar parsear ToDisplayString()
+                        var ds = "";
+                        try { ds = v.ToDisplayString() ?? ""; } catch {}
+                        return SplitNum(ds);
+                }
+            }
+            catch { return 0; }
+        }
+
+        // Extrae número de "3225,846 m²" → 3225.846. Lógica GPC SplitNumberAndUnit.
         static double SplitNum(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return 0;
-            s = s.Trim().Replace(' ', ' ');
-
-            // Quitar prefijo tipo "DoubleLength:" o "DisplayString:"
+            s = s.Trim();
             int col = s.IndexOf(':');
-            if (col >= 0 && col < 20 && !s.Substring(0,col).Any(char.IsDigit))
+            if (col >= 0 && col < 25 && !s.Substring(0,col).Any(char.IsDigit))
                 s = s.Substring(col+1).Trim();
-
-            // Extraer el primer token numérico (antes de la unidad)
-            // Regex equivalente: [-+]?d+[.,]?d*
-            var sb = new System.Text.StringBuilder();
-            bool hasDig = false, hasDec = false;
-            foreach (char ch in s)
-            {
-                if (char.IsDigit(ch))      { sb.Append(ch); hasDig = true; }
-                else if (ch == '-' && !hasDig) sb.Append(ch);
-                else if ((ch == ',' || ch == '.') && hasDig && !hasDec) { sb.Append(ch); hasDec = true; }
-                else if (hasDig)           break; // primera no-cifra después de dígitos
-            }
-            if (sb.Length == 0) return 0;
-
-            var token = sb.ToString();
-            // Normalizar separador decimal: si tiene coma pero no punto → coma es decimal europeo
-            if (token.Contains(',') && !token.Contains('.'))
-                token = token.Replace(',', '.');
-
-            return double.TryParse(token, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double d) ? d : 0;
+            var m = _reNumUnit.Match(s);
+            if (m.Success) return NormalizeAndParse(m.Groups["num"].Value.Replace(" ",""));
+            var m2 = _reFirstNum.Match(s);
+            if (m2.Success) { int e=m2.Index+m2.Length; if(e<s.Length&&char.IsLetter(s[e]))return 0; return NormalizeAndParse(m2.Value); }
+            return 0;
         }
 
         // ── LECTORES DE ÁRBOL ─────────────────────────────────────────────────
@@ -641,31 +907,100 @@ namespace NavisBOQ.Plugin
         }
 
         // ── EXTRACT / FORMAT ──────────────────────────────────────────────────
+        // Recopila todas las instancias Revit alcanzables desde un item del selection set.
+        // El set puede contener nodos de cualquier nivel del árbol:
+        //   - Nodo Category/Family/Type/Layer → expandir todos los descendientes
+        //   - Nodo instancia (LcRevitData_Element) → BuildRow directo
+        //   - Nodo geometría (HasGeometry) → BuildRow (sube a instancia por AncestorsAndSelf)
+        //
+        // Estrategia robusta: para cada descendiente, intentar BuildRow().
+        // BuildRow() sabe subir por AncestorsAndSelf para encontrar la instancia real.
+        // Si no hay datos BOQ, devuelve null y se omite. Con try/catch en cada nodo.
         static object Extract(List<ModelItem> items, string fuente)
         {
-            var seen=new HashSet<string>(); var rows=new List<BoqRow>();
+            var seen = new HashSet<string>();
+            var rows = new List<BoqRow>();
+
             foreach (var item in items)
             {
-                // Caso 1: nodo con LcRevitData_Element con categoría (= instancia directa)
-                var directPC = item.PropertyCategories.FirstOrDefault(p=>string.Equals(p.Name,"LcRevitData_Element",StringComparison.OrdinalIgnoreCase));
-                if (directPC != null)
+                try
                 {
-                    var catDirect = directPC.Properties.FirstOrDefault(p=>p.Name=="LcRevitPropertyElementCategory");
-                    if (catDirect?.Value != null && !string.IsNullOrWhiteSpace(SafeDisplay(catDirect.Value)))
+                    // CASO 1: El item mismo es una instancia (tiene LcRevitData_Element con categoría)
+                    // Ocurre cuando el set contiene instancias directamente.
+                    bool isDirectInstance = false;
+                    try
                     {
-                        if (seen.Add(item.InstanceGuid.ToString())) { var r=BuildRow(item); if(r!=null) rows.Add(r); }
+                        var dpc = item.PropertyCategories.FirstOrDefault(p =>
+                            string.Equals(p.Name,"LcRevitData_Element",StringComparison.OrdinalIgnoreCase));
+                        if (dpc != null)
+                        {
+                            var cp = dpc.Properties.FirstOrDefault(p =>
+                                p.Name == "LcRevitPropertyElementCategory");
+                            if (cp?.Value != null && !string.IsNullOrWhiteSpace(SafeDisplay(cp.Value)))
+                                isDirectInstance = true;
+                        }
+                    } catch {}
+
+                    if (isDirectInstance)
+                    {
+                        if (seen.Add(item.InstanceGuid.ToString()))
+                        {
+                            try { var r = BuildRow(item); if (r != null) rows.Add(r); } catch {}
+                        }
                         continue;
                     }
+
+                    // CASO 2: El item tiene geometría directa → BuildRow sube a instancia
+                    if (item.HasGeometry)
+                    {
+                        if (seen.Add(item.InstanceGuid.ToString()))
+                        {
+                            try { var r = BuildRow(item); if (r != null) rows.Add(r); } catch {}
+                        }
+                        continue;
+                    }
+
+                    // CASO 3: Nodo padre (Category, Family, Type, Layer, etc.)
+                    // Expandir TODOS los descendientes — con y sin geometría.
+                    // BuildRow() sube por AncestorsAndSelf para encontrar la instancia.
+                    // Usamos InstanceGuid para deduplicar instancias ya procesadas.
+                    // Try/catch por nodo para que un error en uno no detenga los demás.
+                    foreach (var desc in item.DescendantsAndSelf)
+                    {
+                        try
+                        {
+                            if (desc == null) continue;
+
+                            // Intentar deduplicar por GUID
+                            string guid = null;
+                            try { guid = desc.InstanceGuid.ToString(); } catch {}
+                            if (guid != null && !seen.Add(guid)) continue;
+
+                            // Solo intentar BuildRow en nodos que tengan geometría
+                            // o que tengan LcRevitData_Element (instancias sin geo propia)
+                            bool hasGeo = false;
+                            try { hasGeo = desc.HasGeometry; } catch {}
+
+                            bool hasElemPC = false;
+                            if (!hasGeo)
+                            {
+                                try
+                                {
+                                    hasElemPC = desc.PropertyCategories.Any(p =>
+                                        string.Equals(p.Name, "LcRevitData_Element",
+                                            StringComparison.OrdinalIgnoreCase));
+                                } catch {}
+                            }
+
+                            if (!hasGeo && !hasElemPC) continue;
+
+                            var r = BuildRow(desc);
+                            if (r != null) rows.Add(r);
+                        }
+                        catch { /* nodo individual con error — continuar con el siguiente */ }
+                    }
                 }
-                // Caso 2: nodo geo
-                if (item.HasGeometry) { if(seen.Add(item.InstanceGuid.ToString())){var r=BuildRow(item);if(r!=null)rows.Add(r);} continue; }
-                // Caso 3: nodo padre — expandir descendientes
-                foreach (var desc in item.DescendantsAndSelf)
-                {
-                    if (!desc.HasGeometry) continue;
-                    if (!seen.Add(desc.InstanceGuid.ToString())) continue;
-                    var r=BuildRow(desc); if(r!=null) rows.Add(r);
-                }
+                catch { /* item con error — continuar con el siguiente */ }
             }
             var desglose=rows.GroupBy(r=>r.Categoria).OrderBy(g=>g.Key).Select(gC=>(object)new{
                 categoria=gC.Key,piezas=gC.Count(),
@@ -693,9 +1028,23 @@ namespace NavisBOQ.Plugin
 
         static List<BoqSummaryRow> Summ(List<BoqRow> rows) =>
             rows.GroupBy(r=>new{r.Nivel,r.Categoria,r.Familia,r.Tipo,r.Unidad})
-                .Select(g=>new BoqSummaryRow{Nivel=g.Key.Nivel,Cat=g.Key.Categoria,Familia=g.Key.Familia,Tipo=g.Key.Tipo,
-                    Area=Math.Round(g.Sum(r=>r.Area),2),Vol=Math.Round(g.Sum(r=>r.Volumen),2),Long_=Math.Round(g.Sum(r=>r.Longitud),2),
-                    Cantidad=Math.Round(g.Sum(r=>r.Cantidad),2),Unidad=g.Key.Unidad,N=g.Count()})
+                .Select(g=>new BoqSummaryRow{
+                    Nivel        = g.Key.Nivel,
+                    Cat          = g.Key.Categoria,
+                    Familia      = g.Key.Familia,
+                    Tipo         = g.Key.Tipo,
+                    Area         = Math.Round(g.Sum(r=>r.Area),    2),
+                    Vol          = Math.Round(g.Sum(r=>r.Volumen),  2),
+                    Long_        = Math.Round(g.Sum(r=>r.Longitud), 2),
+                    Cantidad     = Math.Round(g.Sum(r=>r.Cantidad), 2),
+                    Unidad       = g.Key.Unidad,
+                    N            = g.Count(),
+                    // Props del tipo — todas las instancias del mismo Tipo tienen los mismos valores
+                    TipoDesc     = g.FirstOrDefault(r=>!string.IsNullOrEmpty(r.TipoDesc))?.TipoDesc ?? "",
+                    TipoMaterial = g.FirstOrDefault(r=>!string.IsNullOrEmpty(r.TipoMaterial))?.TipoMaterial ?? "",
+                    TipoAncho    = g.First().TipoAncho,
+                    TipoEspesor  = g.First().TipoEspesor
+                })
                 .OrderBy(r=>r.Cat).ThenBy(r=>r.Nivel).ThenBy(r=>r.Tipo).ToList();
 
         // ── HELPERS ───────────────────────────────────────────────────────────

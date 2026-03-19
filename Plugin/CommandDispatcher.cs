@@ -69,6 +69,9 @@ namespace NavisBOQ.Plugin
                     case "run_preconstruccion_1":
                         result = BoqTools.RunPreConstruccion1();
                         break;
+                    case "run_preconstruccion_2":
+                        result = BoqTools.RunPreConstruccion2();
+                        break;
                     case "export_json":
                         result = BoqTools.ExportJson(GetStr(p, "output_path"));
                         break;

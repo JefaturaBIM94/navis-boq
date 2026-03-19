@@ -216,7 +216,9 @@ namespace NavisBOQ.McpServer
                           level         = new { type = "string",  description = "Filtrar nivel. Opcional." },
                           summary_only  = new { type = "boolean", description = "true=resumen." } }, new string[0]),
                 MakeTool("run_preconstruccion_1",   "BOQ arq: Muros,Losas,Cubiertas,Plafones,Puertas,Ventanas,Fachada.", new { }, new string[0]),
-                MakeTool("highlight_elements",      "Resalta elementos por categoria.",
+
+                MakeTool("run_preconstruccion_2", "Corrida estructural: Columnas, Vigas, Zapatas.",
+                    new { }, new string[0]),                MakeTool("highlight_elements",      "Resalta elementos por categoria.",
                     new { categories = new { type = "array",  items = new { type = "string" }, description = "Categorias." },
                           level      = new { type = "string", description = "Nivel. Opcional." } }, new string[0]),
                 MakeTool("clear_selection",         "Limpia seleccion NW.",                         new { }, new string[0]),
