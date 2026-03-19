@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  NavisBOQ.plugin.xml
+  
+  Este archivo le dice a Navisworks cómo cargar el plugin.
+  Debe estar en la MISMA carpeta que el DLL compilado:
+    C:\Program Files\Autodesk\Navisworks Manage 2025\Plugins\NavisBOQ\
+  
+  Navisworks escanea la carpeta Plugins\ al arrancar y lee todos los .plugin.xml
+  que encuentre. Si el archivo no está o tiene errores, el plugin no carga.
+  
+  IMPORTANTE: El atributo "name" en <plugin> debe coincidir exactamente con
+  el primer parámetro del atributo [Plugin(...)] en NavisBOQPlugin.cs
+-->
+<plugins version="1.0">
+  <plugin name="NavisBOQ"
+          displayname="NavisBOQ — Cuantificaciones para Claude"
+          desc="MCP Server para extracción de BOQ desde Claude Desktop. Soporta Muros, Losas, Cubiertas, Plafones, Puertas, Ventanas y más."
+          developer="Tu Empresa — AECO RD"
+          image="16x16.png">
+    
+    <!-- 
+      El DLL principal del plugin.
+      Navisworks lo busca relativo a la carpeta donde está este .plugin.xml
+    -->
+    <commands>
+      <command id="NavisBOQ" className="NavisBOQ.Plugin.NavisBOQPlugin" />
+    </commands>
+
+    <!--
+      AddInPlugin: indica que este plugin se carga automáticamente
+      al abrir Navisworks, sin necesidad de que el usuario lo active.
+      Esto es necesario para que el servidor HTTP esté disponible
+      desde el momento en que Navisworks arranca.
+    -->
+    <addintriggers>
+      <trigger event="OnStartup" command="NavisBOQ" />
+    </addintriggers>
+
+  </plugin>
+</plugins>

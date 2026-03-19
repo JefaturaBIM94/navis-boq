@@ -1,0 +1,19 @@
+﻿# Binarios compilados
+Plugin/bin/
+Plugin/obj/
+McpServer/bin/
+McpServer/obj/
+
+# Visual Studio
+*.user
+*.suo
+.vs/
+*.pdb
+
+# Navisworks DLLs (no subir — son de la instalación local)
+*.nwd
+*.nwf
+*.nwc
+
+# Credenciales y configs locales
+claude_desktop_config.json

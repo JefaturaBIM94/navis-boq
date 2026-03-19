@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      .NET 8 para el MCP Server — Claude Desktop lo requiere.
+      Este proyecto es independiente del Plugin (que usa net48).
+    -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>NavisBOQ.McpServer</AssemblyName>
+    <RootNamespace>NavisBOQ.McpServer</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!--
+      PublishSingleFile: empaca todo en un solo .exe.
+      Más fácil para distribuir y configurar en claude_desktop_config.json
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- System.Text.Json incluido en .NET 8 — no necesitamos NuGet adicional -->
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+  </ItemGroup>
+
+</Project>

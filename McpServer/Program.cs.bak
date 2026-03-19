@@ -1,0 +1,392 @@
+// =============================================================================
+// NavisBOQ MCP Server — .NET 8
+//
+// Este proceso es el puente entre Claude Desktop y el Plugin de Navisworks.
+//
+// Flujo completo:
+//   Claude Desktop → (MCP stdio) → ESTE PROCESO → (HTTP localhost:8765) → Plugin en NW
+//
+// Por qué dos procesos:
+//   - Claude Desktop requiere .NET 8 para el MCP
+//   - Navisworks requiere .NET Framework 4.8 para el Plugin
+//   - No pueden ser el mismo proceso → necesitamos el bridge HTTP
+//
+// Este servidor:
+//   1. Habla MCP con Claude Desktop via stdin/stdout (protocolo JSON-RPC 2.0)
+//   2. Traduce las llamadas de tools a HTTP requests al plugin en NW
+//   3. Devuelve la respuesta a Claude
+// =============================================================================
+
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+
+namespace NavisBOQ.McpServer
+{
+    class Program
+    {
+        // Puerto donde escucha el Plugin de Navisworks
+        private const string PLUGIN_URL = "http://localhost:8765/";
+
+        private static readonly HttpClient _http = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(120) // NWD grandes pueden tardar
+        };
+
+        private static readonly JsonSerializerOptions _jsonOpts = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            WriteIndented = false
+        };
+
+        static async Task Main(string[] args)
+        {
+            // Stderr → Claude Desktop lo captura para logs, no interfiere con stdio
+            Console.Error.WriteLine("[NavisBOQ-MCP] Servidor iniciado.");
+            Console.Error.WriteLine($"[NavisBOQ-MCP] Conectando a plugin NW en {PLUGIN_URL}");
+
+            // Verificar que el plugin de Navisworks esté activo
+            bool pluginActivo = await PingPlugin();
+            if (!pluginActivo)
+            {
+                Console.Error.WriteLine("[NavisBOQ-MCP] ⚠️  Plugin de Navisworks NO responde.");
+                Console.Error.WriteLine("[NavisBOQ-MCP]    Asegúrate de que Navisworks 2025 esté abierto.");
+            }
+            else
+            {
+                Console.Error.WriteLine("[NavisBOQ-MCP] ✅ Plugin de Navisworks activo y respondiendo.");
+            }
+
+            // Loop principal MCP — leer de stdin, responder a stdout
+            using var reader = new StreamReader(Console.OpenStandardInput(),  Encoding.UTF8);
+            using var writer = new StreamWriter(Console.OpenStandardOutput(), Encoding.UTF8)
+                               { AutoFlush = true };
+
+            while (true)
+            {
+                string? line = await reader.ReadLineAsync();
+                if (line == null) break;
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                JsonNode? request;
+                try { request = JsonNode.Parse(line); }
+                catch { continue; }
+
+                if (request == null) continue;
+
+                string responseJson = await HandleMcpRequest(request);
+                await writer.WriteLineAsync(responseJson);
+            }
+        }
+
+        // =====================================================================
+        // MCP Protocol Handler
+        // =====================================================================
+
+        static async Task<string> HandleMcpRequest(JsonNode req)
+        {
+            var id     = req["id"];
+            var method = req["method"]?.GetValue<string>() ?? "";
+
+            try
+            {
+                object? result = method switch
+                {
+                    // ── Lifecycle MCP ─────────────────────────────────────────
+                    "initialize" => BuildInitializeResult(),
+                    "notifications/initialized" => null, // No se responde
+                    "ping"       => new { },
+
+                    // ── Tools ─────────────────────────────────────────────────
+                    "tools/list" => BuildToolsList(),
+                    "tools/call" => await HandleToolCall(req["params"]),
+
+                    _ => throw new Exception($"Método MCP no soportado: {method}")
+                };
+
+                // Las notificaciones no tienen respuesta
+                if (result == null && method.StartsWith("notifications/"))
+                    return "";
+
+                return BuildResponse(id, result);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[NavisBOQ-MCP] Error en {method}: {ex.Message}");
+                return BuildErrorResponse(id, -32000, ex.Message);
+            }
+        }
+
+        // =====================================================================
+        // Manejar llamadas a tools — forwarding al plugin de Navisworks
+        // =====================================================================
+
+        static async Task<object> HandleToolCall(JsonNode? paramsNode)
+        {
+            if (paramsNode == null)
+                throw new Exception("Params requeridos para tools/call");
+
+            var toolName = paramsNode["name"]?.GetValue<string>()
+                           ?? throw new Exception("'name' requerido en tool call");
+
+            var arguments = paramsNode["arguments"] as JsonObject ?? new JsonObject();
+
+            // Construir el comando para el plugin de Navisworks
+            var command = new JsonObject
+            {
+                ["tool"]   = toolName,
+                ["params"] = arguments
+            };
+
+            var commandJson = command.ToJsonString();
+
+            // Enviar al plugin via HTTP
+            string pluginResponse;
+            try
+            {
+                var content  = new StringContent(commandJson, Encoding.UTF8, "application/json");
+                var response = await _http.PostAsync(PLUGIN_URL, content);
+                pluginResponse = await response.Content.ReadAsStringAsync();
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new Exception(
+                    $"No se puede conectar al plugin de Navisworks. " +
+                    $"¿Está Navisworks 2025 abierto con el plugin cargado? " +
+                    $"Error: {ex.Message}");
+            }
+
+            // El plugin responde { "ok": true, "data": {...} } o { "ok": false, "error": "..." }
+            var parsed = JsonNode.Parse(pluginResponse);
+            var ok     = parsed?["ok"]?.GetValue<bool>() ?? false;
+
+            if (!ok)
+            {
+                var errMsg = parsed?["error"]?.GetValue<string>() ?? "Error desconocido en el plugin";
+                throw new Exception(errMsg);
+            }
+
+            // Extraer data y devolverla como texto para Claude
+            var data     = parsed?["data"];
+            var dataText = data?.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                           ?? "{}";
+
+            // MCP requiere que el resultado de tools/call sea content[].text
+            return new
+            {
+                content = new[]
+                {
+                    new { type = "text", text = dataText }
+                }
+            };
+        }
+
+        // =====================================================================
+        // Lista de tools que exponemos a Claude
+        // =====================================================================
+
+        static object BuildToolsList() => new
+        {
+            tools = new object[]
+            {
+                MakeTool(
+                    "ping",
+                    "Verifica que el plugin de Navisworks esté activo y listo",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "get_model_summary",
+                    "Resumen del modelo NWD abierto: categorías disponibles, niveles, " +
+                    "número de elementos y estado de zonificación. " +
+                    "Úsala primero para entender con qué modelo estás trabajando.",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "get_categories",
+                    "Lista todas las categorías Revit presentes en el modelo con conteo de elementos. " +
+                    "Indica cuáles están soportadas para BOQ y cuáles no.",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "get_parameters",
+                    "Descubre qué parámetros (tipo e instancia) tiene una categoría específica. " +
+                    "Ejemplo: get_parameters con category='Walls' te dice qué datos tiene cada muro.",
+                    new
+                    {
+                        category = new
+                        {
+                            type        = "string",
+                            description = "Nombre de la categoría Revit (ej: 'Walls', 'Floors', 'Roofs')"
+                        }
+                    },
+                    new[] { "category" }),
+
+                MakeTool(
+                    "extract_quantities",
+                    "Extrae cuantificaciones BOQ del modelo. " +
+                    "Devuelve tabla con Edificio, Zona, Nivel, Categoría, Tipo, Cantidad, Unidad. " +
+                    "Sin filtros extrae todo el modelo. Con filtros solo las categorías/niveles indicados.",
+                    new
+                    {
+                        categories = new
+                        {
+                            type        = "array",
+                            items       = new { type = "string" },
+                            description = "Lista de categorías BOQ a extraer. " +
+                                         "Nombres en español del mapeo: Muros, Losas/Pisos, Cubiertas, " +
+                                         "Plafones, Puertas, Ventanas, Panel Fachada, Estructura, etc. " +
+                                         "Vacío = extraer todas las categorías."
+                        },
+                        level = new
+                        {
+                            type        = "string",
+                            description = "Filtrar por nivel (ej: 'Nivel 01', 'N+4.50'). Opcional."
+                        },
+                        building = new
+                        {
+                            type        = "string",
+                            description = "Filtrar por edificio o zona (ej: 'Edificio A'). Opcional."
+                        },
+                        summary_only = new
+                        {
+                            type        = "boolean",
+                            description = "true (default) = solo tabla resumen agrupada. " +
+                                         "false = incluye detalle por cada elemento (puede ser muy grande)."
+                        }
+                    },
+                    new string[0]),
+
+                MakeTool(
+                    "run_preconstruccion_1",
+                    "CORRIDA ESTÁNDAR ARQUITECTÓNICA — Extrae el BOQ completo de: " +
+                    "Muros, Losas/Pisos, Cubiertas, Plafones, Puertas, Ventanas y Panel Fachada. " +
+                    "Agrupado por Nivel y Tipo. Esta es la corrida base para propuestas de concurso.",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "highlight_elements",
+                    "Resalta visualmente elementos en la vista 3D de Navisworks. " +
+                    "Los elementos quedan seleccionados (azul) en la interfaz de NW. " +
+                    "Útil para validar visualmente los datos antes de exportar.",
+                    new
+                    {
+                        categories = new
+                        {
+                            type        = "array",
+                            items       = new { type = "string" },
+                            description = "Categorías a resaltar (ej: ['Muros', 'Puertas'])"
+                        },
+                        level = new
+                        {
+                            type        = "string",
+                            description = "Filtrar por nivel. Opcional."
+                        }
+                    },
+                    new string[0]),
+
+                MakeTool(
+                    "clear_selection",
+                    "Limpia la selección actual en Navisworks (deselecciona todo)",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "list_selection_sets",
+                    "Lista todos los Selection Sets y Search Sets guardados en el NWD. " +
+                    "Incluye grupos y subconjuntos. Útil para ver qué filtros ya existen en el modelo.",
+                    new { }, new string[0]),
+
+                MakeTool(
+                    "extract_from_set",
+                    "Extrae cantidades de un Selection Set o Search Set existente en el NWD. " +
+                    "Activa el set en Navisworks y cuantifica los elementos resultantes.",
+                    new
+                    {
+                        set_name = new
+                        {
+                            type        = "string",
+                            description = "Nombre exacto del Selection Set (usa list_selection_sets para verlos)"
+                        }
+                    },
+                    new[] { "set_name" }),
+
+                MakeTool(
+                    "export_json",
+                    "Exporta todos los datos del BOQ a un archivo JSON en el Escritorio. " +
+                    "El JSON se usa luego para generar el Excel con: python make_excel.py archivo.json",
+                    new
+                    {
+                        output_path = new
+                        {
+                            type        = "string",
+                            description = "Ruta completa del archivo JSON de salida. " +
+                                         "Opcional — por defecto va al Escritorio."
+                        }
+                    },
+                    new string[0]),
+            }
+        };
+
+        // =====================================================================
+        // Helpers
+        // =====================================================================
+
+        static object MakeTool(string name, string description,
+                                object inputProperties, string[] required) => new
+        {
+            name,
+            description,
+            inputSchema = new
+            {
+                type       = "object",
+                properties = inputProperties,
+                required
+            }
+        };
+
+        static object BuildInitializeResult() => new
+        {
+            protocolVersion = "2024-11-05",
+            capabilities    = new
+            {
+                tools = new { listChanged = false }
+            },
+            serverInfo = new
+            {
+                name    = "NavisBOQ-MCP",
+                version = "1.0.0"
+            }
+        };
+
+        static string BuildResponse(JsonNode? id, object? result) =>
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id,
+                result
+            }, _jsonOpts);
+
+        static string BuildErrorResponse(JsonNode? id, int code, string message) =>
+            JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id,
+                error   = new { code, message }
+            }, _jsonOpts);
+
+        static async Task<bool> PingPlugin()
+        {
+            try
+            {
+                var body     = new StringContent("{\"tool\":\"ping\",\"params\":{}}",
+                                                 Encoding.UTF8, "application/json");
+                var response = await _http.PostAsync(PLUGIN_URL, body);
+                return response.IsSuccessStatusCode;
+            }
+            catch { return false; }
+        }
+    }
+}
