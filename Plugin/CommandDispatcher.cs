@@ -1,4 +1,3 @@
-// CommandDispatcher.cs — v4 (actualizado para BoqTools v7)
 using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
@@ -12,79 +11,94 @@ namespace NavisBOQ.Plugin
         {
             try
             {
-                var node   = JObject.Parse(string.IsNullOrWhiteSpace(jsonBody) ? "{}" : jsonBody);
-                var tool   = node["tool"]?.Value<string>() ?? node["command"]?.Value<string>() ?? "";
-                var p      = (node["params"] as JObject) ?? new JObject();
+                var node = JObject.Parse(string.IsNullOrWhiteSpace(jsonBody) ? "{}" : jsonBody);
+                var tool = node["tool"]?.Value<string>() ?? node["command"]?.Value<string>() ?? "";
+                var p = (node["params"] as JObject) ?? new JObject();
 
-                object result;
-                switch (tool)
+                object result = tool switch
                 {
-                    case "list_source_files":
-                        result = BoqTools.ListSourceFiles();
-                        break;
-                    case "ping":
-                        result = BoqTools.Ping();
-                        break;
-                    case "get_model_summary":
-                        result = BoqTools.GetModelSummary();
-                        break;
-                    case "get_categories":
-                        result = BoqTools.GetModelSummary(); // resumen incluye categorías
-                        break;
-                    case "dump_properties":
-                        result = BoqTools.DumpProperties(GetInt(p, "max_items", 3));
-                        break;
-                    case "dump_geo_set":
-                        result = BoqTools.DumpGeoSet(GetStr(p, "set_name"), GetInt(p, "max_items", 3));
-                        break;
-                    case "dump_instancia":
-                        result = BoqTools.DumpInstancia(GetStr(p, "categoria", "Walls"), GetInt(p, "max_items", 3));
-                        break;
-                    case "get_parameters":
-                        result = BoqTools.GetParametersForCategory(GetStr(p, "category"));
-                        break;
-                    case "extract_quantities":
-                        result = BoqTools.ExtractQuantities(
-                                     GetStrList(p, "categories"),
-                                     GetStr(p, "level"),
-                                     GetBool(p, "summary_only", true));
-                        break;
-                    case "highlight_elements":
-                        result = BoqTools.HighlightByCategory(
-                                     GetStrList(p, "categories"),
-                                     GetStr(p, "level"));
-                        break;
-                    case "clear_selection":
-                        result = BoqTools.ClearSelection();
-                        break;
-                    case "list_selection_sets":
-                        result = BoqTools.ListSelectionSets();
-                        break;
-                    case "extract_from_set":
-                        result = BoqTools.ExtractFromSelectionSet(GetStr(p, "set_name"));
-                        break;
-                    case "extract_from_current_selection":
-                        result = BoqTools.ExtractFromCurrentSelection();
-                        break;
-                    case "run_preconstruccion_1":
-                        result = BoqTools.RunPreConstruccion1();
-                        break;
-                    case "run_preconstruccion_2":
-                        result = BoqTools.RunPreConstruccion2();
-                        break;
-                    case "export_json":
-                        result = BoqTools.ExportJson(GetStr(p, "output_path"));
-                        break;
-                    default:
-                        throw new Exception("Herramienta desconocida: '" + tool + "'. Usa 'ping' para verificar.");
-                }
+                    "ping" => BoqTools.Ping(),
+                    "list_source_files" => BoqTools.ListSourceFiles(),
+                    "get_model_summary" => BoqTools.GetModelSummary(ParseRunOptions(p)),
+                    "list_selection_sets" => BoqTools.ListSelectionSets(),
 
-                return JsonConvert.SerializeObject(new { ok = true, data = result }, Newtonsoft.Json.Formatting.Indented);
+                    "extract_from_set" => BoqTools.ExtractFromSelectionSet(
+                        GetStr(p, "set_name"),
+                        ParseRunOptions(p, forceSelectionSetName: GetStr(p, "set_name"))
+                    ),
+
+                    "extract_from_current_selection" => BoqTools.ExtractFromCurrentSelection(ParseRunOptions(p)),
+
+                    "extract_quantities" => BoqTools.ExtractQuantities(
+                        GetStrList(p, "categories"),
+                        ParseRunOptions(p)
+                    ),
+
+                    "run_preconstruccion_1" => BoqTools.RunPreConstruccion1(ParseRunOptions(p)),
+                    "run_preconstruccion_2" => BoqTools.RunPreConstruccion2(ParseRunOptions(p)),
+                    "run_preconstruccion_2_manual" => BoqTools.RunPreConstruccion2Manual(ParseRunOptions(p)),
+                    "run_preconstruccion_3" => BoqTools.RunPreConstruccion3(ParseRunOptions(p)),
+                    "run_preconstruccion_3_manual" => BoqTools.RunPreConstruccion3Manual(ParseRunOptions(p)),
+
+                    "run_preconstruccion_3_probe" => BoqTools.RunPreConstruccion3Probe(
+                        ParseRunOptions(p),
+                        GetInt(p, "max_probe", 10)
+                    ),
+
+                    "highlight_elements" => BoqTools.HighlightByCategory(
+                        GetStrList(p, "categories"),
+                        GetStr(p, "level")
+                    ),
+
+                    "clear_selection" => BoqTools.ClearSelection(),
+
+                    "dump_properties" => BoqTools.DumpProperties(GetInt(p, "max_items", 3)),
+                    "dump_geo_set" => BoqTools.DumpGeoSet(GetStr(p, "set_name"), GetInt(p, "max_items", 3)),
+                    "dump_instancia" => BoqTools.DumpInstancia(GetStr(p, "categoria", "Walls"), GetInt(p, "max_items", 3)),
+                    "get_parameters" => BoqTools.GetParametersForCategory(GetStr(p, "category")),
+                    "export_json" => BoqTools.ExportJson(GetStr(p, "output_path")),
+
+                    _ => throw new Exception("Herramienta desconocida: '" + tool + "'.")
+                };
+
+                return JsonConvert.SerializeObject(new
+                {
+                    ok = true,
+                    data = result
+                }, Formatting.None);
             }
             catch (Exception ex)
             {
-                return JsonConvert.SerializeObject(new { ok = false, error = ex.Message });
+                return JsonConvert.SerializeObject(new
+                {
+                    ok = false,
+                    error = ex.Message
+                }, Formatting.None);
             }
+        }
+
+        private static RunOptions ParseRunOptions(JObject p, string forceSelectionSetName = "")
+        {
+            var opt = new RunOptions
+            {
+                ScopeMode = GetStr(p, "scope_mode", "all"),
+                SelectionSet = !string.IsNullOrWhiteSpace(forceSelectionSetName)
+                    ? forceSelectionSetName
+                    : GetStr(p, "selection_set", ""),
+                Level = GetStr(p, "level", ""),
+                OutputMode = GetStr(p, "output_mode", "auto"),
+                MaxItems = GetInt(p, "max_items", 12000),
+                MaxNodes = GetInt(p, "max_nodes", 50000),
+                StrictLimits = GetBool(p, "strict_limits", true)
+            };
+
+            if (!string.IsNullOrWhiteSpace(opt.SelectionSet) && opt.ScopeMode == "all")
+                opt.ScopeMode = "selection_set";
+
+            if (!string.IsNullOrWhiteSpace(opt.Level) && opt.ScopeMode == "all")
+                opt.ScopeMode = "level";
+
+            return opt;
         }
 
         private static int GetInt(JObject p, string key, int def = 0)
@@ -110,11 +124,14 @@ namespace NavisBOQ.Plugin
             var list = new List<string>();
             var v = p[key] as JArray;
             if (v == null) return list;
+
             foreach (var item in v)
             {
                 var s = item.Value<string>();
-                if (s != null) list.Add(s);
+                if (!string.IsNullOrWhiteSpace(s))
+                    list.Add(s);
             }
+
             return list;
         }
     }
