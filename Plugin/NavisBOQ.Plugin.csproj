@@ -93,6 +93,12 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <ItemGroup>
+    <Compile Include="Models\CategoryConstants.cs" />
+    <Compile Include="Models\ElementSnapshot.cs" />
+    <Compile Include="Models\ExecutionBudget.cs" />
+    <Compile Include="Models\RunOptions.cs" />
+    <Compile Include="Models\ScopePreflight.cs" />
+    <Compile Include="Models\ToolEnvelope.cs" />
     <Compile Include="NavisBOQPlugin.cs" />
     <Compile Include="CommandDispatcher.cs" />
     <Compile Include="BoqTools.cs" />

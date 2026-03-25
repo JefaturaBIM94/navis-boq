@@ -570,7 +570,10 @@ namespace NavisBOQ.Plugin
             var cats = new List<string> {
                 "Muros","Walls","Losas","Floors","Cubiertas","Roofs",
                 "Plafones","Ceilings","Puertas","Doors","Ventanas","Windows",
-                "Fachada","Curtain Wall Panels"
+                "Fachada","Curtain Wall Panels",
+                // nuevas categorías de la corrida 1
+                "Plumbing Fixtures","Aparatos sanitarios",
+                "Generic Models","Modelos genéricos"
             };
 
             return RunCorridaGeneral("run_preconstruccion_1", "Preconstruccion 1 - Arquitectura", cats, opt, BudgetProfiles.Corrida1);
@@ -993,6 +996,433 @@ namespace NavisBOQ.Plugin
                             "Walls",
                             "Floors",
                             "Structural Foundations"
+                        },
+                        modo = "manual_selection_mvp"
+                    },
+                    resumen,
+                    detalle = returnDetail ? detailRows : null,
+                    nota = resumen.Count == 0
+                        ? "No se encontraron elementos validos en la seleccion manual."
+                        : $"OK - {resumen.Sum(r => r.N)} elementos procesados"
+                }
+            };
+        }
+
+        // Manual run for Preconstruccion 1 (Arquitectura) - based on RunPreConstruccion2Manual
+        public static object RunPreConstruccion1Manual(RunOptions opt)
+        {
+            EnsureDoc();
+
+            opt.ScopeMode = "selection";
+
+            const int GREEN_LIMIT = 1000; // límite más estricto para corrida manual 1
+            const int YELLOW_LIMIT = 10000;
+            const int HARD_LIMIT = 15000;
+            const int MAX_DETAIL_ROWS = 6000;
+
+            int selectedCount = 0;
+
+            OnUI(() =>
+            {
+                selectedCount = Application.ActiveDocument.CurrentSelection.SelectedItems.Count;
+            });
+
+            var pre = new ScopePreflight
+            {
+                ScopeResolved = "current_selection",
+                VisitedNodes = selectedCount,
+                CandidateItems = selectedCount
+            };
+
+            if (selectedCount <= 0)
+            {
+                pre.RiskBand = "green";
+                pre.AllowRun = false;
+                pre.ForceSummary = false;
+                pre.Message = "No hay seleccion activa en Navisworks. Selecciona manualmente los elementos y vuelve a correr la herramienta.";
+
+                return new ToolEnvelope<object>
+                {
+                    Ok = false,
+                    Tool = "run_preconstruccion_1_manual",
+                    ScopeMode = "selection",
+                    OutputMode = "summary",
+                    Preflight = pre,
+                    UserMessage = pre.Message
+                };
+            }
+
+            if (selectedCount <= GREEN_LIMIT)
+            {
+                pre.RiskBand = "green";
+                pre.AllowRun = true;
+                pre.ForceSummary = false;
+                pre.Message = "La seleccion es segura para corrida completa.";
+            }
+            else if (selectedCount <= YELLOW_LIMIT)
+            {
+                pre.RiskBand = "yellow";
+                pre.AllowRun = true;
+                pre.ForceSummary = true;
+                pre.Message = "La seleccion es grande; por estabilidad se devolvera solo resumen.";
+                pre.SuggestedSegmentation.Add("Segmenta por nivel.");
+                pre.SuggestedSegmentation.Add("Segmenta por zona.");
+            }
+            else
+            {
+                pre.RiskBand = "red";
+                pre.AllowRun = !opt.StrictLimits;
+                pre.ForceSummary = true;
+                pre.Message = "La seleccion excede el umbral seguro. Segmenta mas el modelo antes de correr la cuantificacion.";
+                pre.SuggestedSegmentation.Add("Oculta lo no deseado y selecciona manualmente un subconjunto menor.");
+            }
+
+            if (!pre.AllowRun)
+            {
+                return new ToolEnvelope<object>
+                {
+                    Ok = false,
+                    Tool = "run_preconstruccion_1_manual",
+                    ScopeMode = "selection",
+                    OutputMode = "summary",
+                    Preflight = pre,
+                    UserMessage = pre.Message
+                };
+            }
+
+            if (string.Equals(opt.OutputMode, "auto", StringComparison.OrdinalIgnoreCase))
+                opt.OutputMode = pre.ForceSummary ? "summary" : "detail";
+
+            if (pre.ForceSummary && string.Equals(opt.OutputMode, "detail", StringComparison.OrdinalIgnoreCase))
+                opt.OutputMode = "summary";
+
+            bool returnDetail = string.Equals(opt.OutputMode, "detail", StringComparison.OrdinalIgnoreCase);
+
+            var detailRows = returnDetail ? new List<BoqRow>() : null;
+            var buckets = new Dictionary<string, AggregateBucket>(StringComparer.OrdinalIgnoreCase);
+            var warnings = new List<string>();
+
+            int visited = 0;
+            int candidatos = 0;
+
+            OnUI(() =>
+            {
+                var seenInst = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (ModelItem selected in Application.ActiveDocument.CurrentSelection.SelectedItems)
+                {
+                    if (selected == null) continue;
+
+                    IEnumerable<ModelItem> candidates;
+
+                    try
+                    {
+                        candidates = selected.DescendantsAndSelf;
+                    }
+                    catch
+                    {
+                        candidates = new[] { selected };
+                    }
+
+                    foreach (ModelItem item in candidates)
+                    {
+                        if (item == null) continue;
+
+                        if (++visited > HARD_LIMIT)
+                        {
+                            warnings.Add("Se alcanzo el limite maximo seguro de elementos visitados en seleccion manual.");
+                            return;
+                        }
+
+                        bool hasGeo = false;
+                        bool hasElemPc = false;
+
+                        try { hasGeo = item.HasGeometry; } catch { }
+                        try
+                        {
+                            hasElemPc = item.PropertyCategories.Any(p =>
+                                string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
+                        }
+                        catch { }
+
+                        if (!hasGeo && !hasElemPc)
+                            continue;
+
+                        PropertyCategory elemPC = null;
+                        ModelItem instNode = null;
+
+                        foreach (var a in item.AncestorsAndSelf)
+                        {
+                            PropertyCategory pc = null;
+                            try { pc = a.PropertyCategories.FindCategoryByDisplayName("Componente"); } catch { }
+                            if (pc == null) try { pc = a.PropertyCategories.FindCategoryByDisplayName("Element"); } catch { }
+                            if (pc == null)
+                            {
+                                try
+                                {
+                                    pc = a.PropertyCategories.FirstOrDefault(p =>
+                                        string.Equals(p.Name, "LcRevitData_Element", StringComparison.OrdinalIgnoreCase));
+                                }
+                                catch { }
+                            }
+
+                            if (pc == null) continue;
+
+                            var catProp = pc.Properties.FirstOrDefault(p =>
+                                string.Equals(p.Name, "LcRevitPropertyElementCategory", StringComparison.OrdinalIgnoreCase));
+
+                            if (catProp?.Value == null) continue;
+
+                            var catVal = SafeDisplay(catProp.Value) ?? "";
+                            if (string.IsNullOrWhiteSpace(catVal)) continue;
+
+                            instNode = a;
+                            elemPC = pc;
+                            break;
+                        }
+
+                        if (instNode == null || elemPC == null)
+                            continue;
+
+                        string instKey = SafeCanonicalId(instNode);
+                        if (!seenInst.Add(instKey))
+                            continue;
+
+                        string categoria = SafeDisplay(
+                            elemPC.Properties.FirstOrDefault(p => p.Name == "LcRevitPropertyElementCategory")?.Value
+                        ) ?? "";
+
+                        bool categoriaValida =
+                            OIC(categoria,"Walls") || OIC(categoria,"Muros") ||
+                            OIC(categoria,"Floors") || OIC(categoria,"Suelos") || OIC(categoria,"Losas") ||
+                            OIC(categoria,"Roofs") || OIC(categoria,"Cubiertas") ||
+                            OIC(categoria,"Ceilings") || OIC(categoria,"Techos") || OIC(categoria,"Plafones") ||
+                            OIC(categoria,"Doors") || OIC(categoria,"Puertas") ||
+                            OIC(categoria,"Windows") || OIC(categoria,"Ventanas") ||
+                            OIC(categoria,"Curtain Wall Panels") || OIC(categoria,"Fachada") ||
+                            OIC(categoria,"Plumbing Fixtures") || OIC(categoria,"Aparatos sanitarios") ||
+                            OIC(categoria,"Generic Models") || OIC(categoria,"Modelos genéricos");
+
+                        if (!categoriaValida)
+                            continue;
+
+                        candidatos++;
+
+                        string elementId = SafeDisplay(
+                            elemPC.Properties.FirstOrDefault(p => p.Name == "LcRevitPropertyElementId")?.Value
+                        ) ?? "";
+
+                        string familia = SafeDisplay(
+                            elemPC.Properties.FirstOrDefault(p => p.Name == "LcRevitPropertyElementFamily")?.Value
+                        ) ?? "";
+
+                        string tipo = SafeDisplay(
+                            elemPC.Properties.FirstOrDefault(p => p.Name == "LcRevitPropertyElementType")?.Value
+                        ) ?? SafeDisplay(
+                            elemPC.Properties.FirstOrDefault(p => p.Name == "LcRevitPropertyElementName")?.Value
+                        ) ?? "";
+
+                        string nivel = "Sin nivel";
+                        try { nivel = LevelFromTree(item) ?? "Sin nivel"; } catch { }
+
+                        double area = 0;
+                        double volume = 0;
+                        double length = 0;
+                        try
+                        {
+                            ReadQuantities(instNode, ref area, ref volume, ref length, categoria);
+                        }
+                        catch { }
+
+                        string materialInst = "";
+                        try
+                        {
+                            var pMat = instNode.PropertyCategories.FindPropertyByName("LcRevitData_Element", "lcldrevit_parameter_-1005500");
+                            if (pMat?.Value != null) materialInst = SafeDisplay(pMat.Value) ?? "";
+                        }
+                        catch { }
+
+                        string tipoDesc = "";
+                        string tipoMat = "";
+                        double tipoAncho = 0;
+                        double tipoEspesor = 0;
+
+                        try
+                        {
+                            ReadGenericTypeProps(instNode, out tipoDesc, out tipoMat, out tipoAncho, out tipoEspesor);
+                        }
+                        catch { }
+
+                        string ubicacionEstructural = "";
+                        try
+                        {
+                            ubicacionEstructural = ReadStructuralLocation(instNode, categoria);
+                        }
+                        catch { }
+
+                        // optional: collect all instance+type properties per element
+                        // Not included in summary by default. Use GetParametersForCategory to list available property names.
+                        Dictionary<string, string> extraProps = null;
+
+                        string boq = categoria;
+                        string unit = "";
+
+                        var m = CM.Mapa.FirstOrDefault(x => OIC(categoria, x.Key));
+                        if (m.Key != null)
+                        {
+                            boq = m.Value.N;
+                            unit = m.Value.U;
+                        }
+
+                        double qty;
+                        string u;
+
+                        if (unit == "pza" || CM.EsPza.Contains(categoria))
+                        {
+                            qty = 1;
+                            u = "pza";
+                        }
+                        else if (unit == "m2" && area > 0)
+                        {
+                            qty = Math.Round(area, 3);
+                            u = "m2";
+                        }
+                        else if (unit == "m3" && volume > 0)
+                        {
+                            qty = Math.Round(volume, 3);
+                            u = "m3";
+                        }
+                        else if (unit == "ml" && length > 0)
+                        {
+                            qty = Math.Round(length, 3);
+                            u = "ml";
+                        }
+                        else if (area > 0)
+                        {
+                            qty = Math.Round(area, 3);
+                            u = "m2";
+                        }
+                        else if (volume > 0)
+                        {
+                            qty = Math.Round(volume, 3);
+                            u = "m3";
+                        }
+                        else if (length > 0)
+                        {
+                            qty = Math.Round(length, 3);
+                            u = "ml";
+                        }
+                        else
+                        {
+                            qty = 1;
+                            u = "pza";
+                        }
+
+                        var row = new BoqRow
+                        {
+                            Nivel = nivel,
+                            Categoria = boq,
+                            Familia = Clean(familia),
+                            Tipo = Clean(tipo),
+                            TipoDesc = tipoDesc,
+                            TipoMaterial = !string.IsNullOrWhiteSpace(tipoMat) ? tipoMat : materialInst,
+                            TipoAncho = Math.Round(tipoAncho, 4),
+                            TipoEspesor = Math.Round(tipoEspesor, 4),
+                            Area = Math.Round(area, 4),
+                            Volumen = Math.Round(volume, 4),
+                            Longitud = Math.Round(length, 4),
+                            Cantidad = qty,
+                            Unidad = u,
+                            ElemId = elementId,
+                            UbicacionEstructural = ubicacionEstructural
+                        };
+
+                        string key = $"{row.Nivel}|{row.Categoria}|{row.Familia}|{row.Tipo}|{row.Unidad}|{row.UbicacionEstructural}";
+
+                        if (!buckets.TryGetValue(key, out var bucket))
+                        {
+                            bucket = new AggregateBucket
+                            {
+                                Level = row.Nivel,
+                                Category = row.Categoria,
+                                Family = row.Familia,
+                                Type = row.Tipo,
+                                Unit = row.Unidad,
+                                TypeDesc = row.TipoDesc,
+                                TypeMaterial = row.TipoMaterial,
+                                TypeWidth = row.TipoAncho,
+                                TypeThickness = row.TipoEspesor,
+                                StructuralLocation = row.UbicacionEstructural
+                            };
+                            buckets[key] = bucket;
+                        }
+
+                        bucket.Count++;
+                        bucket.LengthTotal += row.Longitud;
+                        bucket.AreaTotal += row.Area;
+                        bucket.VolumeTotal += row.Volumen;
+                        bucket.QuantityTotal += row.Cantidad;
+
+                        if (detailRows != null && detailRows.Count < MAX_DETAIL_ROWS)
+                            detailRows.Add(row);
+                    }
+                }
+            });
+
+            if (detailRows != null && detailRows.Count >= MAX_DETAIL_ROWS)
+                warnings.Add("Detalle truncado por tamaño de la seleccion. Segmenta mas el alcance si necesitas detalle completo.");
+
+            pre.CandidateItems = candidatos;
+
+            var resumen = buckets.Values
+                .Select(b => new BoqSummaryRow
+                {
+                    Nivel = b.Level,
+                    Cat = b.Category,
+                    Familia = b.Family,
+                    Tipo = b.Type,
+                    TipoDesc = b.TypeDesc,
+                    TipoMaterial = b.TypeMaterial,
+                    TipoAncho = Math.Round(b.TypeWidth, 4),
+                    TipoEspesor = Math.Round(b.TypeThickness, 4),
+                    Area = Math.Round(b.AreaTotal, 2),
+                    Vol = Math.Round(b.VolumeTotal, 2),
+                    Long_ = Math.Round(b.LengthTotal, 2),
+                    Cantidad = Math.Round(b.QuantityTotal, 2),
+                    Unidad = b.Unit,
+                    N = b.Count,
+                    UbicacionEstructural = b.StructuralLocation
+                })
+                .OrderBy(r => r.Cat).ThenBy(r => r.Nivel).ThenBy(r => r.Tipo)
+                .ToList();
+
+            return new ToolEnvelope<object>
+            {
+                Ok = true,
+                Tool = "run_preconstruccion_1_manual",
+                ScopeMode = "selection",
+                OutputMode = opt.OutputMode,
+                Preflight = pre,
+                Warnings = warnings,
+                UserMessage = BuildUserScopeMessage(pre),
+                Data = new
+                {
+                    rutina = "Preconstruccion 1 Manual - Arquitectura",
+                    ejecutado = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
+                    total_elementos = resumen.Sum(r => r.N),
+                    total_tipos = resumen.Count,
+                    diagnostico = new
+                    {
+                        elementos_seleccionados = selectedCount,
+                        candidatos_validos = candidatos,
+                        categorias = new[]
+                        {
+                            "Walls","Muros","Floors","Suelos","Losas",
+                            "Roofs","Cubiertas","Ceilings","Techos","Plafones",
+                            "Doors","Puertas","Windows","Ventanas",
+                            "Curtain Wall Panels","Fachada",
+                            "Plumbing Fixtures","Aparatos sanitarios",
+                            "Generic Models","Modelos genéricos"
                         },
                         modo = "manual_selection_mvp"
                     },
@@ -2616,6 +3046,55 @@ namespace NavisBOQ.Plugin
 
                 break;
             }
+        }
+
+        // Read all instance and type properties for a given ModelItem and return as dictionary
+        static Dictionary<string, string> ReadAllProperties(ModelItem instNode)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (instNode == null) return result;
+
+            try
+            {
+                // instance/property categories
+                foreach (var pc in instNode.PropertyCategories)
+                {
+                    foreach (var p in pc.Properties)
+                    {
+                        try
+                        {
+                            var key = pc.Name + "." + p.Name;
+                            var val = SafeDisplay(p.Value) ?? "";
+                            if (!result.ContainsKey(key)) result[key] = val;
+                        }
+                        catch { }
+                    }
+                }
+
+                // type properties (look for lcldrevit_tab_type in ancestors)
+                foreach (var a in instNode.AncestorsAndSelf)
+                {
+                    var tpc = a.PropertyCategories.FirstOrDefault(p =>
+                        string.Equals(p.Name, "lcldrevit_tab_type", StringComparison.OrdinalIgnoreCase));
+                    if (tpc == null) continue;
+
+                    foreach (var p in tpc.Properties)
+                    {
+                        try
+                        {
+                            var key = "type." + p.Name;
+                            var val = SafeDisplay(p.Value) ?? "";
+                            if (!result.ContainsKey(key)) result[key] = val;
+                        }
+                        catch { }
+                    }
+
+                    break;
+                }
+            }
+            catch { }
+
+            return result;
         }
 
         static BoqRow ToBoqRow(ElementSnapshot snap)
