@@ -49,5 +49,15 @@ namespace NavisBOQ.Plugin.Models
             MaxDetailRows = 5_000,
             TimeoutMs = 120_000
         };
+
+        public static ExecutionBudget Corrida4 => new ExecutionBudget
+        {
+            GreenCandidateLimit = 8_000,
+            YellowCandidateLimit = 18_000,
+            MaxNodesToVisit = 50_000,
+            MaxDetailRows = 6_000,
+            TimeoutMs = 90_000
+        };
+
     }
 }

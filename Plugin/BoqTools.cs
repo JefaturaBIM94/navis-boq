@@ -5,60 +5,15 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Autodesk.Navisworks.Api;
+using NavisBOQ.Plugin.Services;
+using NavisBOQ.Plugin.Models;
+
 
 namespace NavisBOQ.Plugin
 {
     #region DTOs
 
-    public class RunOptions
-    {
-        public string ScopeMode { get; set; } = "all"; // all | selection | selection_set | level
-        public string SelectionSet { get; set; } = "";
-        public string Level { get; set; } = "";
-        public string OutputMode { get; set; } = "auto"; // auto | summary | detail
-        public int MaxItems { get; set; } = 12000;
-        public int MaxNodes { get; set; } = 50000;
-        public bool StrictLimits { get; set; } = true;
-    }
-
-    public class ExecutionBudget
-    {
-        public int GreenCandidateLimit { get; set; }
-        public int YellowCandidateLimit { get; set; }
-        public int MaxNodesToVisit { get; set; }
-        public int MaxDetailRows { get; set; }
-        public int TimeoutMs { get; set; }
-    }
-
-    public static class BudgetProfiles
-    {
-        public static ExecutionBudget Corrida1 => new ExecutionBudget
-        {
-            GreenCandidateLimit = 10000,
-            YellowCandidateLimit = 25000,
-            MaxNodesToVisit = 50000,
-            MaxDetailRows = 6000,
-            TimeoutMs = 90000
-        };
-
-        public static ExecutionBudget Corrida2 => new ExecutionBudget
-        {
-            GreenCandidateLimit = 10000,
-            YellowCandidateLimit = 25000,
-            MaxNodesToVisit = 50000,
-            MaxDetailRows = 6000,
-            TimeoutMs = 90000
-        };
-
-        public static ExecutionBudget Corrida3 => new ExecutionBudget
-        {
-            GreenCandidateLimit = 5000,
-            YellowCandidateLimit = 12000,
-            MaxNodesToVisit = 50000,
-            MaxDetailRows = 5000,
-            TimeoutMs = 120000
-        };
-    }
+    
 
     public class ScopePreflight
     {
@@ -87,33 +42,7 @@ namespace NavisBOQ.Plugin
         public string UserMessage { get; set; } = "";
     }
 
-    public class ElementSnapshot
-    {
-        public string CanonicalId { get; set; } = "";
-        public string ElementId { get; set; } = "";
-        public string Level { get; set; } = "Sin nivel";
-        public string Category { get; set; } = "";
-        public string Family { get; set; } = "";
-        public string Type { get; set; } = "";
-        public string Material { get; set; } = "";
-        public string Mark { get; set; } = "";
-
-        public double LengthM { get; set; }
-        public double AreaM2 { get; set; }
-        public double VolumeM3 { get; set; }
-
-        public string TypeDesc { get; set; } = "";
-        public string TypeMaterial { get; set; } = "";
-        public double TypeWidth { get; set; }
-        public double TypeThickness { get; set; }
-
-        public double NominalWeightKgm { get; set; }
-        public string SectionName { get; set; } = "";
-        public string SectionShape { get; set; } = "";
-        public string CodeName { get; set; } = "";
-
-        public string SourceSystem { get; set; } = "Revit";
-    }
+   
 
     public class BoqRow
     {
@@ -567,26 +496,14 @@ namespace NavisBOQ.Plugin
 
         public static object RunPreConstruccion1(RunOptions opt)
         {
-            var cats = new List<string> {
-                "Muros","Walls","Losas","Floors","Cubiertas","Roofs",
-                "Plafones","Ceilings","Puertas","Doors","Ventanas","Windows",
-                "Fachada","Curtain Wall Panels",
-                // nuevas categorías de la corrida 1
-                "Plumbing Fixtures","Aparatos sanitarios",
-                "Generic Models","Modelos genéricos"
-            };
-
-            return RunCorridaGeneral("run_preconstruccion_1", "Preconstruccion 1 - Arquitectura", cats, opt, BudgetProfiles.Corrida1);
+            var service = ServiceFactory.CreatePreconstruccion1Service();
+            return service.Run(opt);
         }
 
         public static object RunPreConstruccion2(RunOptions opt)
         {
-            var cats = new List<string> {
-                "Structural Columns","Structural Framing","Structural Foundations",
-                "Walls","Muros","Floors","Suelos","Losas","Roofs","Cubiertas"
-            };
-
-            return RunCorridaGeneral("run_preconstruccion_2", "Preconstruccion 2 - Estructura", cats, opt, BudgetProfiles.Corrida2);
+            var service = ServiceFactory.CreatePreconstruccion2Service();
+            return service.Run(opt);
         }
 
         public static object RunPreConstruccion2Manual(RunOptions opt)
@@ -1437,254 +1354,8 @@ namespace NavisBOQ.Plugin
 
         public static object RunPreConstruccion3(RunOptions opt)
         {
-            EnsureDoc();
-            var budget = BudgetProfiles.Corrida3;
-            var pre = PreflightScope(opt, budget, SnapshotMatchesSteelFilter);
-
-            if (!pre.AllowRun)
-            {
-                return new ToolEnvelope<object>
-                {
-                    Ok = false,
-                    Tool = "run_preconstruccion_3",
-                    ScopeMode = opt.ScopeMode,
-                    OutputMode = "summary",
-                    Preflight = pre,
-                    UserMessage = pre.Message
-                };
-            }
-
-            if (string.Equals(opt.OutputMode, "auto", StringComparison.OrdinalIgnoreCase))
-                opt.OutputMode = pre.ForceSummary ? "summary" : "detail";
-
-            if (pre.ForceSummary && string.Equals(opt.OutputMode, "detail", StringComparison.OrdinalIgnoreCase))
-                opt.OutputMode = "summary";
-
-            bool returnDetail = ShouldReturnDetail(opt, budget);
-            var detailRows = returnDetail ? new List<SteelRow>() : null;
-            var buckets = new Dictionary<string, SteelAggregateBucket>(StringComparer.OrdinalIgnoreCase);
-            var warnings = new List<string>();
-            int excConcreto = 0;
-            int metodo2025 = 0;
-            int metodoFallback = 0;
-            int sinDatos = 0;
-
-            // IMPORTANTE:
-            // En esta versión de diagnóstico NO se lee:
-            // - NominalWeight
-            // - SectionName
-            // - SectionShape
-            // - CodeName
-            // - material desde tipo
-            //
-            // Solo:
-            // - categoría
-            // - material de instancia
-            // - longitud
-            // - volumen
-            // - peso por fallback Vol × 7850
-
-            OnUI(() =>
-            {
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                int visited = 0;
-
-                foreach (var item in ResolveScopeItems(opt))
-                {
-                    if (++visited > Math.Min(opt.MaxNodes, budget.MaxNodesToVisit))
-                    {
-                        warnings.Add("Se alcanzó el límite de nodos visitados.");
-                        break;
-                    }
-
-                    if (!SafeHasGeometry(item) && !HasElementCategory(item))
-                        continue;
-
-                    ElementSnapshot snap = null;
-
-                    try
-                    {
-                        snap = TryBuildSnapshot(item);
-                    }
-                    catch
-                    {
-                        snap = null;
-                    }
-
-                    if (snap == null) continue;
-                    if (!seen.Add(snap.CanonicalId)) continue;
-
-                    // FILTRO ESPECÍFICO DE ACERO SOLO CON MATERIAL DE INSTANCIA
-                    bool isTargetCategory =
-                        OIC(snap.Category, "Structural Framing") ||
-                        OIC(snap.Category, "Structural Columns");
-
-                    if (!isTargetCategory) continue;
-
-                    string mat = snap.Material ?? "";
-
-                    var concretoKeywords = new[] { "concrete", "concreto", "hormigon", "masonry" };
-                    var aceroKeywords = new[] { "steel", "acero", "metal", "metalic", "metallic", "w shape", "hss", "pipe" };
-
-                    bool esConcreto = !string.IsNullOrWhiteSpace(mat) &&
-                                      concretoKeywords.Any(k => mat.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (esConcreto)
-                    {
-                        excConcreto++;
-                        continue;
-                    }
-
-                    bool esAcero = string.IsNullOrWhiteSpace(mat) ||
-                                   aceroKeywords.Any(k => mat.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (!esAcero) continue;
-
-                    // CÁLCULO TEMPORAL SOLO POR VOLUMEN
-                    double pesoKg;
-                    string metodo;
-
-                    if (snap.VolumeM3 > 0)
-                    {
-                        pesoKg = snap.VolumeM3 * 7850.0;
-                        metodo = "Vol×ρ";
-                        metodoFallback++;
-                    }
-                    else
-                    {
-                        pesoKg = 0;
-                        metodo = "N/D";
-                        sinDatos++;
-                    }
-
-                    var steelRow = new SteelRow
-                    {
-                        Nivel = snap.Level,
-                        Categoria = snap.Category,
-                        Familia = Clean(snap.Family),
-                        Tipo = Clean(snap.Type),
-
-                        // DESACTIVADO TEMPORALMENTE
-                        NominalWeight = 0,
-                        SectionName = "",
-                        SectionShape = "",
-                        CodeName = "",
-
-                        MaterialEst = snap.Material ?? "",
-                        Length = Math.Round(snap.LengthM, 4),
-                        Volume = Math.Round(snap.VolumeM3, 4),
-                        PesoKg = Math.Round(pesoKg, 2),
-                        Metodo = metodo,
-                        ElemId = snap.ElementId,
-                        Mark = snap.Mark
-                    };
-
-                    var key = $"{steelRow.Nivel}|{steelRow.Categoria}|{steelRow.Familia}|{steelRow.Tipo}";
-
-                    if (!buckets.TryGetValue(key, out var b))
-                    {
-                        b = new SteelAggregateBucket
-                        {
-                            Level = steelRow.Nivel,
-                            Category = steelRow.Categoria,
-                            Family = steelRow.Familia,
-                            Type = steelRow.Tipo,
-
-                            // DESACTIVADO TEMPORALMENTE
-                            SectionName = "",
-                            SectionShape = "",
-                            CodeName = "",
-                            NominalWeightKgm = 0
-                        };
-                        buckets[key] = b;
-                    }
-
-                    b.NumPieces++;
-                    b.LengthTotalM += steelRow.Length;
-                    b.VolumeTotalM3 += steelRow.Volume;
-                    b.PesoTotalKg += steelRow.PesoKg;
-
-                    if (metodo == "2025+") b.Metodo2025Count++;
-                    else if (metodo == "Vol×ρ") b.MetodoFallbackCount++;
-                    else b.MetodoNDCount++;
-
-                    if (detailRows != null && detailRows.Count < budget.MaxDetailRows)
-                        detailRows.Add(steelRow);
-                }
-            });
-
-            if (detailRows != null && detailRows.Count >= budget.MaxDetailRows)
-                warnings.Add("Detalle truncado por tamaño del alcance. Segmenta más con Selection Sets o por nivel.");
-
-            var resumen = buckets.Values
-                .OrderBy(x => x.Level).ThenBy(x => x.Category).ThenBy(x => x.Type)
-                .Select(b =>
-                {
-                    var metodo = b.MetodoFallbackCount > 0 && b.Metodo2025Count > 0
-                        ? "Mixto"
-                        : (b.Metodo2025Count > 0 ? "2025+" : (b.MetodoFallbackCount > 0 ? "Vol×ρ" : "N/D"));
-
-                    var advertencia = b.MetodoFallbackCount > 0
-                        ? "Peso calculado temporalmente por Vol × 7850 kg/m3."
-                        : (b.MetodoNDCount > 0 ? "Sin datos de peso." : "");
-
-                    return new SteelSummaryRow
-                    {
-                        Nivel = b.Level,
-                        Categoria = b.Category,
-                        Familia = b.Family,
-                        Tipo = b.Type,
-
-                        // DESACTIVADO TEMPORALMENTE
-                        SectionName = "",
-                        SectionShape = "",
-                        CodeName = "",
-                        NominalWeight = 0,
-
-                        NumPiezas = b.NumPieces,
-                        LengthTotal = Math.Round(b.LengthTotalM, 3),
-                        VolumeTotal = Math.Round(b.VolumeTotalM3, 4),
-                        PesoKg = Math.Round(b.PesoTotalKg, 2),
-                        PesoTonRef = b.PesoTotalKg >= 1000 ? (double?)Math.Round(b.PesoTotalKg / 1000.0, 3) : null,
-                        Metodo = metodo,
-                        Advertencia = advertencia
-                    };
-                }).ToList();
-
-            var pesoTotalKg = Math.Round(resumen.Sum(r => r.PesoKg), 2);
-
-            return new ToolEnvelope<object>
-            {
-                Ok = true,
-                Tool = "run_preconstruccion_3",
-                ScopeMode = opt.ScopeMode,
-                OutputMode = opt.OutputMode,
-                Preflight = pre,
-                Warnings = warnings,
-                UserMessage = BuildUserScopeMessage(pre),
-                Data = new
-                {
-                    rutina = "Preconstruccion 3 - Estructura Metalica (modo diagnostico sin lectura de tipo)",
-                    ejecutado = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
-                    total_elementos = resumen.Sum(r => r.NumPiezas),
-                    total_tipos = resumen.Count,
-                    peso_total_kg = pesoTotalKg,
-                    peso_total_ton = pesoTotalKg >= 1000 ? (double?)Math.Round(pesoTotalKg / 1000.0, 3) : null,
-                    diagnostico = new
-                    {
-                        metodo_2025 = metodo2025,
-                        metodo_fallback = metodoFallback,
-                        sin_datos = sinDatos,
-                        excluidos_concreto = excConcreto,
-                        modo = "diagnostico_sin_lectura_tipo"
-                    },
-                    resumen,
-                    detalle = returnDetail ? detailRows : null,
-                    nota = resumen.Count == 0
-                        ? "0 elementos de acero encontrados. Verificar material estructural y segmentación."
-                        : $"OK — {resumen.Sum(r => r.NumPiezas)} piezas | {pesoTotalKg} kg total"
-                }
-            };
+            var service = ServiceFactory.CreatePreconstruccion3Service();
+            return service.Run(opt);
         }
 
         public static object RunPreConstruccion3Probe(RunOptions opt, int maxProbe = 10)

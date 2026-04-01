@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using NavisBOQ.Plugin.Models;
+using ModelRunOptions = NavisBOQ.Plugin.Models.RunOptions;
+using NavisBOQ.Plugin.Services;
 
 namespace NavisBOQ.Plugin
 {
@@ -38,6 +41,10 @@ namespace NavisBOQ.Plugin
                     "run_preconstruccion_2" => BoqTools.RunPreConstruccion2(ParseRunOptions(p)),
                     "run_preconstruccion_2_manual" => BoqTools.RunPreConstruccion2Manual(ParseRunOptions(p)),
                     "run_preconstruccion_3" => BoqTools.RunPreConstruccion3(ParseRunOptions(p)),
+                    "run_preconstruccion_4" => ServiceFactory.CreatePreconstruccion4Service().Run(ParseRunOptions(p)),
+                    "expand_electrical_detail" => ServiceFactory.CreateElectricalDetailExtractionService().ExpandDetail(
+                        ParseDetailExpansionRequest(p)
+                    ),
                     "run_preconstruccion_3_manual" => BoqTools.RunPreConstruccion3Manual(ParseRunOptions(p)),
 
                     "run_preconstruccion_3_probe" => BoqTools.RunPreConstruccion3Probe(
@@ -99,6 +106,24 @@ namespace NavisBOQ.Plugin
                 opt.ScopeMode = "level";
 
             return opt;
+        }
+
+        private static DetailExpansionRequest ParseDetailExpansionRequest(JObject p)
+        {
+            var runOptions = ParseRunOptions(p);
+
+            return new DetailExpansionRequest
+            {
+                RunName = GetStr(p, "run_name", "run_preconstruccion_4"),
+                Options = runOptions,
+                DetailProfile = GetStr(p, "detail_profile", "type_light"),
+                MaxItems = GetInt(p, "max_items", 250),
+                IncludeFamilyFields = GetBool(p, "include_family_fields", true),
+                IncludeTypeFields = GetBool(p, "include_type_fields", true),
+                IncludeInstanceFields = GetBool(p, "include_instance_fields", false),
+                Categories = GetStrList(p, "categories"),
+                Types = GetStrList(p, "types")
+            };
         }
 
         private static int GetInt(JObject p, string key, int def = 0)

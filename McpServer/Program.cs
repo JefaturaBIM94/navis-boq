@@ -309,6 +309,29 @@ namespace NavisBOQ.McpServer
                     CommonRunOptions(),
                     Array.Empty<string>()),
 
+                MakeTool("run_preconstruccion_4",
+                    "Corrida Eléctrica: luminarias, interruptores, tableros, transformadores, subestaciones y conduits.",
+                    CommonRunOptions(),
+                    Array.Empty<string>()),
+
+                MakeTool("expand_electrical_detail",
+                    "Expande detalle lazy de Corrida 4 electrica. Lee preferentemente TYPE/FAMILY y solo INSTANCE cuando el perfil lo requiere.",
+                    new
+                    {
+                        run_name = Str("Nombre de la corrida origen. Default: run_preconstruccion_4"),
+                        scope_mode = Str("all | selection | selection_set | level"),
+                        selection_set = Str("Nombre del Selection Set. Opcional."),
+                        level = Str("Nivel. Opcional."),
+                        detail_profile = Str("type_light | tube_focus | fixture_focus | electrical_full"),
+                        max_items = Int("Maximo de elementos a expandir. Default segun perfil."),
+                        include_family_fields = Bool("Leer campos de family node."),
+                        include_type_fields = Bool("Leer campos de type node."),
+                        include_instance_fields = Bool("Leer campos de instance/custom."),
+                        categories = ArrStr("Filtrar por categorias Revit o categorias BOQ. Opcional."),
+                        types = ArrStr("Filtrar por tipos especificos. Opcional.")
+                    },
+                    Array.Empty<string>()),
+
                 MakeTool("run_preconstruccion_3_manual",
                     "Corrida 3 manual: usa la seleccion activa en Navisworks. Peso KG = Nominal Weight x Length. Fallback: Volumen x 7850 kg/m3.",
                     new
