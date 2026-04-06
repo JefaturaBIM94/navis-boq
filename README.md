@@ -18,7 +18,7 @@ NavisBOQ conecta **Navisworks** con **Claude AI** para que puedas pedir cantidad
 "¿Cuántas columnas y vigas hay en GROUND LEVEL?"
 "Cuantifica lo que tengo seleccionado ahora en Navisworks"
 "Dame la corrida estructural del set ESTRUCTURA DE CONCRETO"
-```
+```"Dame los kilos totales o por seccion por tipo y por nivel de todo el acero estructural del proyecto"
 
 \---
 
@@ -39,6 +39,7 @@ NavisBOQ conecta **Navisworks** con **Claude AI** para que puedas pedir cantidad
 |Comparar conjuntos|"Compara OFICINAS vs COMEDOR"|
 |Exportar a JSON|BOQ completo al Escritorio para procesar en Excel|
 |Diagnóstico de propiedades|`dump\_instancia`, `dump\_geo\_set` para depuración|
+NEW: CUANTIFICACION ESTRUCTURAS DE ACERO REVIT BASED (KILOS POR PARAMETROS 'NOMINAL WEIGHT' / 'LINEAL WEIGHT', FALLBACK POR DENSIDAD 7850KG/M
 
 ## ❌ Qué NO hace
 
@@ -67,7 +68,7 @@ NavisBOQ conecta **Navisworks** con **Claude AI** para que puedas pedir cantidad
 |Windows / Ventanas|Ventanas|pza por nivel y tipo|
 |Curtain Wall Panels|Fachada|m²|
 
-### Corrida 2 — Estructura
+### Corrida 2 — Estructura Concretos
 
 |Categoría Revit|Nombre en BOQ|Métrica|
 |-|-|-|
@@ -76,6 +77,16 @@ NavisBOQ conecta **Navisworks** con **Claude AI** para que puedas pedir cantidad
 |Structural Foundations|Cimentación|m³|
 |Walls / Muros|Muros (estructurales)|m² + m³ + ml|
 |Floors / Suelos|Losas (estructurales)|m² + m³|
+
+### Corrida 3 — Estructura Acero Revit Based
+
+|Categoría Revit|Nombre en BOQ|Métrica|
+|-|-|-|
+|Structural Columns|Columnas|ml-vol - kg|
+|Structural Framing|Vigas|ml-vol - kg|
+categorias anexas como stiffeners, plates, conexiones estructurales no estan dispónibles aun.
+
+
 
 > \*\*Nota:\*\* La separación "arquitectónico vs estructural" la define el \*\*Selection Set\*\*, no la categoría. Walls siempre es Walls en Revit — si está en tu set de estructura, se cuantifica como muro estructural.
 
